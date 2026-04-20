@@ -1,4 +1,4 @@
-2025-10-16 (4a1a39f): Merge branch 'main' of https://github.com/heit0r/OpenHantek6022 into heit0r-main PR #443 - Adding minor changes in PT translation.
+2025-10-16 (bb36066): PR #443 - Adding minor changes in PT translation.
 2025-10-15 (3c021dc): (docs) Adding minor changes in PT translation.
 2025-10-10 (a54e26a): fix missing QtDBus on macOS
 2025-10-10 (f690e2b): remove macdeployqtfix from submodule
