@@ -206,6 +206,13 @@ jobs:
           export PATH=$(brew --prefix qt@6)/bin:${PATH}
           cd openhantek
           macdeployqt OpenHantek.app -always-overwrite -verbose=1
+          # Re-sign the app after macdeployqt modifies the bundle
+          # Required on Apple Silicon, recommended on Intel Macs with macOS 11+
+          xattr -cr OpenHantek.app
+          codesign --force --deep --sign - OpenHantek.app
+          #
+          # Verify the signature (optional but recommended)
+          codesign --verify --deep --strict OpenHantek.app
           create-dmg --volname OpenHantek --volicon ../../openhantek/res/images/OpenHantek.icns \
             --window-pos 200 120 --window-size 800 400 --icon-size 100 --icon "OpenHantek.app" 200 190 \
             --skip-jenkins --hide-extension "OpenHantek.app" --app-drop-link 600 185 \
@@ -287,6 +294,13 @@ jobs:
           export PATH=$(brew --prefix qt@6)/bin:${PATH}
           cd openhantek
           macdeployqt OpenHantek.app -always-overwrite -verbose=1
+          # Re-sign the app after macdeployqt modifies the bundle
+          # Required on Apple Silicon, recommended on Intel Macs with macOS 11+
+          xattr -cr OpenHantek.app
+          codesign --force --deep --sign - OpenHantek.app
+          #
+          # Verify the signature (optional but recommended)
+          codesign --verify --deep --strict OpenHantek.app
           create-dmg --volname OpenHantek --volicon ../../openhantek/res/images/OpenHantek.icns \
             --window-pos 200 120 --window-size 800 400 --icon-size 100 --icon "OpenHantek.app" 200 190 \
             --skip-jenkins --hide-extension "OpenHantek.app" --app-drop-link 600 185 \

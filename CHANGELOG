@@ -1,3 +1,4 @@
+2026-04-21 (736bbed): update workflow for current runer versions; update doc (closes #459)
 2026-04-20 (23cd42a): use firmware built with current SDCC version, no functional change
 2025-10-16 (bb36066): PR #443 - Adding minor changes in PT translation.
 2025-10-15 (3c021dc): (docs) Adding minor changes in PT translation.
