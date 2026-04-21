@@ -1,3 +1,4 @@
+2026-04-21 (640a284): update github runner actions b/c node.js 20 actions are deprecated
 2026-04-21 (2659dc2): check modification from alwaysEpic (#PR459)
 2026-04-21 (736bbed): update workflow for current runer versions; update doc (closes #459)
 2026-04-20 (23cd42a): use firmware built with current SDCC version, no functional change
