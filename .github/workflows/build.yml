@@ -20,6 +20,7 @@
 name: Build
 # check if OH6022 builds on some recent operating systems
 # deploy Ubuntu / macOS / Windows binaries
+# https://docs.github.com/en/actions/reference/runners/github-hosted-runners
 
 on: [push]
 
@@ -55,7 +56,6 @@ jobs:
         git config user.email "Ho-Ro@users.noreply.github.com"
         git config user.name "Ho-Ro"
         git fetch --tags --force || true
-        git submodule update --init --recursive
         echo "git_describe=$(git describe)"
         echo "git_describe=$(git describe)" >> $GITHUB_OUTPUT
 
@@ -121,7 +121,6 @@ jobs:
         git config user.email "Ho-Ro@users.noreply.github.com"
         git config user.name "Ho-Ro"
         git fetch --tags --force || true
-        git submodule update --init --recursive
         echo "git_describe=$(git describe)"
         echo "git_describe=$(git describe)" >> $GITHUB_OUTPUT
 
@@ -168,7 +167,7 @@ jobs:
 # -------------------------
 #
   macos-amd64:
-    runs-on: macos-13
+    runs-on: macos-15-intel
     steps:
 
     # --- Clone the latest commit ---
@@ -187,7 +186,6 @@ jobs:
         git config user.email "Ho-Ro@users.noreply.github.com"
         git config user.name "Ho-Ro"
         git fetch --tags --force || true
-        git submodule update --init --recursive
         echo "git_describe=$(git describe)"
         echo "git_describe=$(git describe)" >> $GITHUB_OUTPUT
 
@@ -250,7 +248,7 @@ jobs:
 # -------------------------
 #
   macos-arm64:
-    runs-on: macos-14
+    runs-on: macos-15
     steps:
 
     # --- Clone the latest commit ---
@@ -269,7 +267,6 @@ jobs:
         git config user.email "Ho-Ro@users.noreply.github.com"
         git config user.name "Ho-Ro"
         git fetch --tags --force || true
-        git submodule update --init --recursive
         echo "git_describe=$(git describe)"
         echo "git_describe=$(git describe)" >> $GITHUB_OUTPUT
 
@@ -351,7 +348,6 @@ jobs:
         git config user.email "Ho-Ro@users.noreply.github.com"
         git config user.name "Ho-Ro"
         git fetch --tags --force || true
-        git submodule update --init --recursive
         echo "git_describe=$(git describe)"
         echo "git_describe=$(git describe)" >> $GITHUB_OUTPUT
 
@@ -422,7 +418,6 @@ jobs:
 #         git config user.email "Ho-Ro@users.noreply.github.com"
 #         git config user.name "Ho-Ro"
 #         git fetch --tags --force || true
-#         git submodule update --init --recursive
 #         echo "git_describe=$(git describe)"
 #         echo "git_describe=$(git describe)" >> $GITHUB_OUTPUT
 
