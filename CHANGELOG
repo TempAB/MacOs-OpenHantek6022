@@ -1,3 +1,5 @@
+2026-04-25 (cada658): fix: reconnect scope after USB disconnect
+2026-04-21 (320c7f5): reactivate the stale workflow, mark after 365 days, lock 30 days later
 2026-04-21 (640a284): update github runner actions b/c node.js 20 actions are deprecated
 2026-04-21 (2659dc2): check modification from alwaysEpic (#PR459)
 2026-04-21 (736bbed): update workflow for current runer versions; update doc (closes #459)
