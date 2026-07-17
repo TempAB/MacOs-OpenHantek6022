@@ -180,12 +180,13 @@ There is no point in supporting the LA input from OpenHantek.
 ### Offset Calibration
 The oscilloscope has quite a large zero point error. To calibrate the offset quickly, simply proceed as follows:
 1. Short-circuit both inputs, e.g. with a 50Ω terminating plug or by short-circuiting the probe inputs.
-2. Activate the menu setting Oscilloscope/Calibrate Offset.
-3. Set a slow timebase of 10..100 ms/div, resulting sample rate is 100..10 kS/s.
-4. Slowly select all voltage settings for CH1 and CH2 one after the other.
-5. Finally deactivate the menu setting Oscilloscope/Calibrate offset.
+2. Enable both channels and set a slow timebase of 10..100 ms/div, resulting sample rate is 100..10 kS/s.
+3. Activate the menu setting Oscilloscope/Calibrate Offset.
+4. Slowly select all voltage settings for CH1 and CH2 one after the other. The status bar reports each completed range.
+5. After all 16 channel/range combinations are complete, deactivate the menu setting Oscilloscope/Calibrate Offset.
 
-The offset correction is now active and is also permanently saved in EEPROM or as an `*.ini` file when switched off.
+The offset correction is now active and is saved immediately in the device-specific `*.ini` file. The previous file is
+preserved as `*.ini.bak`. Online offset calibration does not modify the oscilloscope EEPROM.
 
 ### OpenGL Support
 OpenHantek6022 uses the *OpenGL* graphics library to display the data. It requires a graphics card that supports
@@ -279,4 +280,3 @@ If you are lucky enough to live in peace, please [**donate**](https://www.icrc.o
 to the *International Committee of the Red Cross*.
 
 ![blue-yellow](docs/images/blue-yellow.png)
-

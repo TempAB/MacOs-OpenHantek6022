@@ -18,3 +18,7 @@ firmware/hex
 ui_*.h
 *.sh
 .DS_Store
+
+# Local device data; never publish calibration captures or backups.
+/calibration-backups/
+/diagnostic-logs/

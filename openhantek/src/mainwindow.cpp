@@ -31,6 +31,7 @@
 #include <QPalette>
 #include <QPrintDialog>
 #include <QPrinter>
+#include <QSignalBlocker>
 #include <QTimer>
 #include <QValidator>
 
@@ -239,24 +240,31 @@ MainWindow::MainWindow( HantekDsoControl *dsoControl, DsoSettings *settings, Exp
         statusBar()->addPermanentWidget( commandEdit, 1 );
 
         connect( ui->actionCalibrateOffset, &QAction::toggled, this, [ this, dsoControl, scope ]( bool active ) {
-            if ( active )
+            if ( active ) {
                 active = ( QMessageBox::Apply ==
                            QMessageBox::information( this, tr( "Calibrate Offset" ),
-                                                     tr( "Short-circuit both inputs and slowly select all voltage gain settings" ),
+                                                     tr( "Short-circuit both inputs, enable both channels, and select a 10 ms/div "
+                                                         "timebase.\n\n"
+                                                         "After clicking Apply, slowly select every voltage range on both channels. "
+                                                         "Turn off Calibrate Offset only after all 16 ranges are reported complete." ),
                                                      QMessageBox::Apply | QMessageBox::Abort, QMessageBox::Abort ) );
+                if ( !active ) {
+                    QSignalBlocker blocker( ui->actionCalibrateOffset );
+                    ui->actionCalibrateOffset->setChecked( false );
+                    scope->liveCalibrationActive = false;
+                    return;
+                }
+            }
             if ( verboseLevel > 2 )
                 qDebug() << "  Calibrate offset" << active;
-            ui->actionCalibrateOffset->setChecked( active );
-            dsoControl->calibrateOffset( active );
             scope->liveCalibrationActive = active;
+            QMetaObject::invokeMethod( dsoControl, "calibrateOffset", Qt::QueuedConnection, Q_ARG( bool, active ) );
         } );
 
-        // disable calibration e.g. if zero signal too noisy or offset too big
-        connect( dsoControl, &HantekDsoControl::liveCalibrationError, this, [ this, scope ]() {
-            if ( verboseLevel > 2 )
-                qDebug() << "  Live calibration error";
-            scope->liveCalibrationActive = false;           // set incactive first to avoid ..
-            ui->actionCalibrateOffset->setChecked( false ); // .. calibration storage actions
+        connect( dsoControl, &HantekDsoControl::offsetCalibrationStateChanged, this, [ this, scope ]( bool active ) {
+            scope->liveCalibrationActive = active;
+            QSignalBlocker blocker( ui->actionCalibrateOffset );
+            ui->actionCalibrateOffset->setChecked( active );
         } );
 
         connect( ui->actionManualCommand, &QAction::toggled, this, [ this ]( bool checked ) {

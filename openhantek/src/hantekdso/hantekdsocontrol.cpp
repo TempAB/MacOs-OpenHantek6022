@@ -3,6 +3,8 @@
 // #define TIMESTAMPDEBUG
 
 #include <QDebug>
+#include <QFile>
+#include <QSaveFile>
 #include <QTimer>
 
 #include <QtCore>
@@ -14,6 +16,28 @@
 
 using namespace Hantek;
 using namespace Dso;
+
+static bool copyFileAtomically( const QString &sourcePath, const QString &targetPath ) {
+    QFile source( sourcePath );
+    if ( !source.open( QIODevice::ReadOnly ) )
+        return false;
+    const QByteArray contents = source.readAll();
+    if ( source.error() != QFileDevice::NoError )
+        return false;
+
+    QSaveFile target( targetPath );
+    if ( !target.open( QIODevice::WriteOnly ) )
+        return false;
+    if ( target.write( contents ) != contents.size() ) {
+        target.cancelWriting();
+        return false;
+    }
+    if ( !target.commit() )
+        return false;
+
+    QFile verification( targetPath );
+    return verification.open( QIODevice::ReadOnly ) && verification.readAll() == contents;
+}
 
 
 HantekDsoControl::HantekDsoControl( ScopeDevice *device, const DSOModel *model, int verboseLevel )
@@ -50,15 +74,10 @@ HantekDsoControl::~HantekDsoControl() {
 void HantekDsoControl::prepareForShutdown() {
     if ( verboseLevel > 1 )
         qDebug() << " HDC::prepareForShutdown()";
-    calibrateOffset( false );
-    bool canUseCalibrationEEPROM = false;
-    {
-        QReadLocker locker( &scopeDeviceLock );
-        canUseCalibrationEEPROM = scopeDevice && deviceConnectionState == DeviceConnectionState::Connected &&
-                                  scopeDevice->isConnected() && scopeDevice->isRealHW() &&
-                                  specification->hasCalibrationEEPROM;
+    if ( offsetCalibrationActive ) {
+        memcpy( offsetCorrection, offsetCalibrationOriginal, sizeof( offsetCorrection ) );
+        offsetCalibrationActive = false;
     }
-    updateCalibrationValues( canUseCalibrationEEPROM );
 }
 
 
@@ -587,7 +606,7 @@ Dso::ErrorCode HantekDsoControl::getCalibrationFromIniFile() {
     calibrationSettings->endGroup(); // eeprom
 
     if ( replaceCalibrationEEPROM ) // values created by python tool "calibrate_6022.py" replace the EEPROM content
-        memset( controlsettings.cmdGetCalibration.data(), 0xFF, sizeof( CalibrationValues ) );
+        memset( controlsettings.calibrationValues, 0xFF, sizeof( CalibrationValues ) );
     else // enhance the intrinsic calibration values from EEPROM
         getCalibrationFromEEPROM();
 
@@ -595,51 +614,79 @@ Dso::ErrorCode HantekDsoControl::getCalibrationFromIniFile() {
 }
 
 
-Dso::ErrorCode HantekDsoControl::updateCalibrationValues( bool useEEPROM ) {
-    if ( calibrationHasChanged ) {
-        if ( verboseLevel > 2 )
-            qDebug() << "  Write calibration data into" << ( useEEPROM ? "EEPROM" : "iniFile" );
-
-        calibrationSettings->beginGroup( "gain" );
-        for ( int ch = 0; ch < HANTEK_CHANNEL_NUMBER; ++ch ) {
-            calibrationSettings->beginGroup( "ch" + QString::number( ch ) );
-            int index = 0;
-            double gain = 1.0;
-            for ( const auto &g : model->spec()->gain ) {
-                if ( !useEEPROM )
-                    gain = round( 100.0 * gainCorrection[ index ][ ch ] ) / 100.0;
-                calibrationSettings->setValue( QString::number( int( g.Vdiv * 1000 ) ) + "mV", gain );
-                // qDebug() << QString::number( int( g.Vdiv * 1000 ) ) + "mV" << gain;
-                ++index;
-            }
-            calibrationSettings->endGroup();
-        }
-        calibrationSettings->endGroup();
-
-        calibrationSettings->beginGroup( "offset" );
-        for ( int ch = 0; ch < HANTEK_CHANNEL_NUMBER; ++ch ) {
-            calibrationSettings->beginGroup( "ch" + QString::number( ch ) );
-            int index = 0;
-            double offset = 0.0;
-            for ( const auto &g : model->spec()->gain ) {
-                if ( !useEEPROM )
-                    offset = round( 100.0 * offsetCorrection[ index ][ ch ] ) / 100.0;
-                calibrationSettings->setValue( QString::number( int( g.Vdiv * 1000 ) ) + "mV", offset );
-                // qDebug() << QString::number( int( g.Vdiv * 1000 ) ) + "mV" << offset;
-                ++index;
-            }
-            calibrationSettings->endGroup();
-        }
-        calibrationSettings->endGroup();
-
-        calibrationSettings->beginGroup( "eeprom" );
-        calibrationSettings->setValue( "replace_eeprom", !useEEPROM );
-        calibrationSettings->endGroup(); // eeprom
-
-        if ( useEEPROM )
-            writeCalibrationToEEPROM();
+bool HantekDsoControl::saveOffsetCalibration() {
+    if ( !calibrationSettings ) {
+        emit statusMessage( tr( "Offset calibration not saved: no calibration INI file is available." ), 0 );
+        return false;
     }
-    return Dso::ErrorCode::NONE;
+
+    calibrationSettings->sync();
+    if ( calibrationSettings->status() != QSettings::NoError ) {
+        emit statusMessage( tr( "Offset calibration not saved: the calibration INI file is not writable." ), 0 );
+        return false;
+    }
+
+    const QString filePath = calibrationSettings->fileName();
+    const QString backupPath = filePath + ".bak";
+    const bool hadCalibrationFile = QFileInfo::exists( filePath );
+    if ( hadCalibrationFile && !copyFileAtomically( filePath, backupPath ) ) {
+        emit statusMessage( tr( "Offset calibration not saved: unable to create backup %1" ).arg( backupPath ), 0 );
+        return false;
+    }
+
+    calibrationSettings->beginGroup( "offset" );
+    for ( int channel = 0; channel < HANTEK_CHANNEL_NUMBER; ++channel ) {
+        calibrationSettings->beginGroup( "ch" + QString::number( channel ) );
+        int gainIndex = 0;
+        for ( const auto &gain : model->spec()->gain ) {
+            const double offset = round( 100.0 * offsetCorrection[ gainIndex ][ channel ] ) / 100.0;
+            calibrationSettings->setValue( QString::number( int( gain.Vdiv * 1000 ) ) + "mV", offset );
+            ++gainIndex;
+        }
+        calibrationSettings->endGroup();
+    }
+    calibrationSettings->endGroup();
+    calibrationSettings->sync();
+
+    bool verified = calibrationSettings->status() == QSettings::NoError;
+    QSettings verification( filePath, QSettings::IniFormat );
+    verification.beginGroup( "offset" );
+    for ( int channel = 0; verified && channel < HANTEK_CHANNEL_NUMBER; ++channel ) {
+        verification.beginGroup( "ch" + QString::number( channel ) );
+        int gainIndex = 0;
+        for ( const auto &gain : model->spec()->gain ) {
+            const double expected = round( 100.0 * offsetCorrection[ gainIndex ][ channel ] ) / 100.0;
+            const double stored =
+                verification.value( QString::number( int( gain.Vdiv * 1000 ) ) + "mV", std::numeric_limits< double >::quiet_NaN() )
+                    .toDouble();
+            if ( !qIsFinite( stored ) || qAbs( stored - expected ) > 0.0001 ) {
+                verified = false;
+                break;
+            }
+            ++gainIndex;
+        }
+        verification.endGroup();
+    }
+    verification.endGroup();
+    verified = verified && verification.status() == QSettings::NoError;
+
+    if ( !verified ) {
+        calibrationSettings.reset();
+        const bool restored = hadCalibrationFile ? copyFileAtomically( backupPath, filePath )
+                                                 : ( !QFileInfo::exists( filePath ) || QFile::remove( filePath ) );
+        getCalibrationFromIniFile();
+        emit statusMessage( restored ? tr( "Offset calibration not saved; the previous INI file was restored." )
+                                     : tr( "Offset calibration save failed and the previous INI file could not be restored." ),
+                            0 );
+        return false;
+    }
+
+    emit statusMessage(
+        hadCalibrationFile
+            ? tr( "Offset calibration saved to %1. Previous settings: %2" ).arg( filePath, backupPath )
+            : tr( "Offset calibration saved to %1" ).arg( filePath ),
+        0 );
+    return true;
 }
 
 
@@ -746,14 +793,135 @@ Dso::ErrorCode HantekDsoControl::writeCalibrationToEEPROM() {
 }
 
 
+void HantekDsoControl::resetOffsetCalibration() {
+    memset( offsetCalibrationSum, 0, sizeof( offsetCalibrationSum ) );
+    memset( offsetCalibrationFirst, 0, sizeof( offsetCalibrationFirst ) );
+    memset( offsetCalibrationFrames, 0, sizeof( offsetCalibrationFrames ) );
+    memset( offsetCalibrationComplete, 0, sizeof( offsetCalibrationComplete ) );
+    for ( unsigned channel = 0; channel < HANTEK_CHANNEL_NUMBER; ++channel )
+        offsetCalibrationLastGain[ channel ] = HANTEK_GAIN_STEPS;
+}
+
+
+unsigned HantekDsoControl::completedOffsetCalibrationRanges() const {
+    unsigned completed = 0;
+    for ( unsigned gainIndex = 0; gainIndex < HANTEK_GAIN_STEPS; ++gainIndex )
+        for ( unsigned channel = 0; channel < HANTEK_CHANNEL_NUMBER; ++channel )
+            if ( offsetCalibrationComplete[ gainIndex ][ channel ] )
+                ++completed;
+    return completed;
+}
+
+
+void HantekDsoControl::processOffsetCalibrationFrame( ChannelID channel, unsigned gainIndex, double liveOffset, bool clipped ) {
+    if ( channel >= HANTEK_CHANNEL_NUMBER || gainIndex >= HANTEK_GAIN_STEPS )
+        return;
+
+    if ( offsetCalibrationLastGain[ channel ] != gainIndex ) {
+        offsetCalibrationLastGain[ channel ] = gainIndex;
+        offsetCalibrationSum[ gainIndex ][ channel ] = 0.0;
+        offsetCalibrationFrames[ gainIndex ][ channel ] = 0;
+        return; // discard the first frame after changing the input range
+    }
+    if ( offsetCalibrationComplete[ gainIndex ][ channel ] )
+        return;
+
+    constexpr double maximumOffset = 25.0;
+    constexpr double maximumFrameDifference = 1.0;
+    if ( clipped || qAbs( liveOffset ) > maximumOffset ) {
+        offsetCalibrationSum[ gainIndex ][ channel ] = 0.0;
+        offsetCalibrationFrames[ gainIndex ][ channel ] = 0;
+        emit statusMessage( tr( "Offset calibration is waiting for a stable, grounded signal on CH%1." ).arg( channel + 1 ),
+                            3000 );
+        return;
+    }
+
+    if ( !offsetCalibrationFrames[ gainIndex ][ channel ] ) {
+        offsetCalibrationFirst[ gainIndex ][ channel ] = liveOffset;
+        offsetCalibrationSum[ gainIndex ][ channel ] = liveOffset;
+        offsetCalibrationFrames[ gainIndex ][ channel ] = 1;
+        return;
+    }
+
+    if ( qAbs( liveOffset - offsetCalibrationFirst[ gainIndex ][ channel ] ) > maximumFrameDifference ) {
+        offsetCalibrationFirst[ gainIndex ][ channel ] = liveOffset;
+        offsetCalibrationSum[ gainIndex ][ channel ] = liveOffset;
+        offsetCalibrationFrames[ gainIndex ][ channel ] = 1;
+        emit statusMessage( tr( "Offset calibration is retrying an unstable measurement on CH%1." ).arg( channel + 1 ),
+                            3000 );
+        return;
+    }
+
+    offsetCalibrationSum[ gainIndex ][ channel ] += liveOffset;
+    ++offsetCalibrationFrames[ gainIndex ][ channel ];
+    constexpr unsigned stableFramesNeeded = 2;
+    if ( offsetCalibrationFrames[ gainIndex ][ channel ] < stableFramesNeeded )
+        return;
+
+    offsetCorrection[ gainIndex ][ channel ] =
+        offsetCalibrationSum[ gainIndex ][ channel ] / offsetCalibrationFrames[ gainIndex ][ channel ];
+    offsetCalibrationComplete[ gainIndex ][ channel ] = true;
+
+    const unsigned completed = completedOffsetCalibrationRanges();
+    const unsigned total = HANTEK_GAIN_STEPS * HANTEK_CHANNEL_NUMBER;
+    if ( completed == total ) {
+        emit statusMessage( tr( "Offset calibration measured all %1 ranges. Turn off Calibrate Offset to save." ).arg( total ),
+                            0 );
+    } else {
+        const int millivolts = int( round( model->spec()->gain[ gainIndex ].Vdiv * 1000 ) );
+        emit statusMessage( tr( "Offset calibration: CH%1 %2 mV/div complete (%3 of %4)." )
+                                .arg( channel + 1 )
+                                .arg( millivolts )
+                                .arg( completed )
+                                .arg( total ),
+                            3000 );
+    }
+}
+
+
 void HantekDsoControl::calibrateOffset( bool enable ) {
     if ( enable ) {
-        if ( !scope->liveCalibrationActive )
-            memcpy( controlsettings.correctionValues, controlsettings.calibrationValues, sizeof( CalibrationValues ) );
-    } else {
-        if ( scope->liveCalibrationActive )
-            calibrationHasChanged = true;
+        if ( offsetCalibrationActive )
+            return;
+        if ( controlsettings.voltage.size() < HANTEK_CHANNEL_NUMBER || !controlsettings.voltage[ 0 ].used ||
+             !controlsettings.voltage[ 1 ].used ) {
+            emit statusMessage( tr( "Offset calibration requires both channels to be enabled." ), 0 );
+            emit offsetCalibrationStateChanged( false );
+            return;
+        }
+        if ( controlsettings.samplerate.current < 10e3 || controlsettings.samplerate.current > 100e3 ) {
+            emit statusMessage( tr( "Offset calibration requires a 10 to 100 kS/s sample rate. Select 10 ms/div and try again." ),
+                                0 );
+            emit offsetCalibrationStateChanged( false );
+            return;
+        }
+
+        memcpy( offsetCalibrationOriginal, offsetCorrection, sizeof( offsetCorrection ) );
+        resetOffsetCalibration();
+        offsetCalibrationActive = true;
+        emit offsetCalibrationStateChanged( true );
+        emit statusMessage( tr( "Offset calibration started. Slowly select every voltage range on both channels." ), 0 );
+        return;
     }
+
+    if ( !offsetCalibrationActive )
+        return;
+    offsetCalibrationActive = false;
+    emit offsetCalibrationStateChanged( false );
+
+    const unsigned completed = completedOffsetCalibrationRanges();
+    const unsigned total = HANTEK_GAIN_STEPS * HANTEK_CHANNEL_NUMBER;
+    if ( completed != total ) {
+        memcpy( offsetCorrection, offsetCalibrationOriginal, sizeof( offsetCorrection ) );
+        emit statusMessage( tr( "Offset calibration cancelled: %1 of %2 ranges measured. The INI file was not changed." )
+                                .arg( completed )
+                                .arg( total ),
+                            0 );
+        return;
+    }
+
+    if ( !saveOffsetCalibration() )
+        memcpy( offsetCorrection, offsetCalibrationOriginal, sizeof( offsetCorrection ) );
 }
 
 
@@ -791,37 +959,12 @@ static double byteToGain( uint8_t gain ) {
 }
 
 
-static uint8_t gainToByte( double gain ) {
-    if ( gain >= 0.75 && gain <= 1.25 )
-        return uint8_t( round( 0x80 + 500 * ( gain - 1 ) ) );
-    else
-        return 0;
-}
-
-
 static double bytesToOffset( uint8_t offsetRaw, uint8_t offsetFine ) {
     if ( offsetRaw && offsetRaw != 255 && offsetFine && offsetFine != 255 ) { // data valid
         return offsetRaw + ( offsetFine - 0x80 ) / 250.0;
     } else {         // no offset correction
         return 0x80; // ADC has "binary offset" format (0x80 = 0V)
     }
-}
-
-
-static uint8_t offsetToRaw( double offset ) {
-    if ( offset > 96 && offset < 140 )
-        return uint8_t( round( offset ) );
-    else
-        return 0;
-}
-
-
-static uint8_t offsetToFine( double offset ) {
-    if ( offset > 96 && offset < 140 ) {
-        offset -= round( offset );
-        return uint8_t( round( 0x80 + 250 * offset ) );
-    } else
-        return 0;
 }
 
 
@@ -881,9 +1024,7 @@ void HantekDsoControl::convertRawDataToSamples() {
         double gainCorr = gainCorrection[ gainIndex ][ channel ];
         double offsetCorr = offsetCorrection[ gainIndex ][ channel ];
         double liveOffset = 0.0;
-
-        int minValue = 0xFF;
-        int maxValue = 0x00;
+        bool calibrationClipped = false;
 
         for ( unsigned index = 0; index < resultSamples;
               ++index, rawBufPos += activeChannels * rawOversampling ) { // advance either by one or two blocks
@@ -892,45 +1033,23 @@ void HantekDsoControl::convertRawDataToSamples() {
             double sample = 0.0;
             for ( unsigned iii = 0; iii < rawOversampling * activeChannels; iii += activeChannels ) {
                 int rawSample = raw.data[ rawBufPos + channel + iii ]; // CH1/CH2/CH1/CH2 ...
-                if ( rawSample == 0x00 || rawSample == 0xFF )          // min or max -> clipped
+                if ( rawSample == 0x00 || rawSample == 0xFF ) {        // min or max -> clipped
                     result.clipped |= 0x01 << channel;
-                if ( rawSample > maxValue )
-                    maxValue = rawSample;
-                if ( rawSample < minValue )
-                    minValue = rawSample;
+                    calibrationClipped = true;
+                }
                 sample += double( rawSample ) - offsetCalibration;
             }
             sample /= rawOversampling;
-            if ( scope->liveCalibrationActive ) {
+            if ( offsetCalibrationActive )
                 liveOffset += sample;
-            }
             // qDebug() << channel << offsetCorrection[ gainIndex ][ channel ];
             sample -= offsetCorr;
             sample *= gainCorr;
 
             result.data[ channel ][ index ] = sign * sample / voltageScale * gainCalibration * probeAttn;
         }
-        liveOffset /= resultSamples;
-
-        if ( scope->liveCalibrationActive ) {
-            if ( maxValue - minValue > 10 || liveOffset > 20 ) { // big jitter/noise, offset too big
-                emit liveCalibrationError();                     // stop live calibration without storing something
-            } else {
-                offsetCorrection[ gainIndex ][ channel ] = liveOffset;
-                if ( result.samplerate < 30e6 ) {
-                    controlsettings.correctionValues->off.ls.step[ gainIndex ][ channel ] =
-                        offsetToRaw( liveOffset + offsetCalibration );
-                    controlsettings.correctionValues->fine.ls.step[ gainIndex ][ channel ] =
-                        offsetToFine( liveOffset + offsetCalibration );
-                } else {
-                    controlsettings.correctionValues->off.hs.step[ gainIndex ][ channel ] =
-                        offsetToRaw( liveOffset + offsetCalibration );
-                    controlsettings.correctionValues->fine.hs.step[ gainIndex ][ channel ] =
-                        offsetToFine( liveOffset + offsetCalibration );
-                }
-                controlsettings.correctionValues->gain.step[ gainIndex ][ channel ] = gainToByte( gainCorr * gainCalibration );
-            }
-        }
+        if ( offsetCalibrationActive )
+            processOffsetCalibrationFrame( channel, gainIndex, liveOffset / resultSamples, calibrationClipped );
     }
 } // convertRawDataToSamples()
 

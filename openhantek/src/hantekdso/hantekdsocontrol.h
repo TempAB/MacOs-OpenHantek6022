@@ -124,7 +124,7 @@ class HantekDsoControl : public QObject {
     /// \brief Stops the device.
     void quitSampling();
 
-    /// \brief Saves calibration settings e.g. to the scope's EEPROM
+    /// \brief Discards an unfinished calibration before the controller is destroyed.
     void prepareForShutdown();
 
   private:
@@ -140,8 +140,11 @@ class HantekDsoControl : public QObject {
     bool replaceCalibrationEEPROM = false;
     Dso::ErrorCode getCalibrationFromIniFile();
     Dso::ErrorCode getCalibrationFromEEPROM();
-    Dso::ErrorCode updateCalibrationValues( bool useEEPROM = false );
+    bool saveOffsetCalibration();
     Dso::ErrorCode writeCalibrationToEEPROM();
+    void resetOffsetCalibration();
+    void processOffsetCalibrationFrame( ChannelID channel, unsigned gainIndex, double liveOffset, bool clipped );
+    unsigned completedOffsetCalibrationRanges() const;
 
     /// Get the number of samples that are expected returned by the scope.
     /// In rolling mode this depends on the usb speed and packet size.
@@ -190,10 +193,16 @@ class HantekDsoControl : public QObject {
     DSOsamples result;
     unsigned expectedSampleCount = 0; ///< The expected total number of samples at
                                       /// the last check before sampling started
-    bool calibrationHasChanged = false;
     std::unique_ptr< QSettings > calibrationSettings;
     double offsetCorrection[ HANTEK_GAIN_STEPS ][ HANTEK_CHANNEL_NUMBER ];
     double gainCorrection[ HANTEK_GAIN_STEPS ][ HANTEK_CHANNEL_NUMBER ];
+    bool offsetCalibrationActive = false;
+    double offsetCalibrationOriginal[ HANTEK_GAIN_STEPS ][ HANTEK_CHANNEL_NUMBER ] = {};
+    double offsetCalibrationSum[ HANTEK_GAIN_STEPS ][ HANTEK_CHANNEL_NUMBER ] = {};
+    double offsetCalibrationFirst[ HANTEK_GAIN_STEPS ][ HANTEK_CHANNEL_NUMBER ] = {};
+    unsigned offsetCalibrationFrames[ HANTEK_GAIN_STEPS ][ HANTEK_CHANNEL_NUMBER ] = {};
+    bool offsetCalibrationComplete[ HANTEK_GAIN_STEPS ][ HANTEK_CHANNEL_NUMBER ] = {};
+    unsigned offsetCalibrationLastGain[ HANTEK_CHANNEL_NUMBER ] = { HANTEK_GAIN_STEPS, HANTEK_GAIN_STEPS };
     bool capturing = false;
     bool samplingStarted = false;
     bool stateMachineRunning = false;
@@ -333,7 +342,7 @@ class HantekDsoControl : public QObject {
 
     void deviceAvailabilityChanged( bool available );
 
-    void liveCalibrationError() const; // live calibration stopped due to noise or big offset
+    void offsetCalibrationStateChanged( bool active ) const;
 };
 
 Q_DECLARE_METATYPE( DSOsamples * )
