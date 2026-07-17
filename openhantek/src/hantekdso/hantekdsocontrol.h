@@ -30,6 +30,7 @@
 #include <QThread>
 
 class CapturingThread;
+class CalibrationDiagnostics; // CAL_DIAG_TEMP: Temporary dry-run logger.
 class ScopeDevice;
 
 struct Raw {
@@ -192,6 +193,8 @@ class HantekDsoControl : public QObject {
                                       /// the last check before sampling started
     bool calibrationHasChanged = false;
     std::unique_ptr< QSettings > calibrationSettings;
+    std::unique_ptr< CalibrationDiagnostics > calibrationDiagnostics; // CAL_DIAG_TEMP: Remove on production branch.
+    bool calibrationDiagnosticDryRun = true;                           // CAL_DIAG_TEMP: Blocks every persistence path.
     double offsetCorrection[ HANTEK_GAIN_STEPS ][ HANTEK_CHANNEL_NUMBER ];
     double gainCorrection[ HANTEK_GAIN_STEPS ][ HANTEK_CHANNEL_NUMBER ];
     bool capturing = false;

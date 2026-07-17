@@ -242,7 +242,9 @@ MainWindow::MainWindow( HantekDsoControl *dsoControl, DsoSettings *settings, Exp
             if ( active )
                 active = ( QMessageBox::Apply ==
                            QMessageBox::information( this, tr( "Calibrate Offset" ),
-                                                     tr( "Short-circuit both inputs and slowly select all voltage gain settings" ),
+                                                     // CAL_DIAG_TEMP: Make the no-write safeguard explicit to the tester.
+                                                     tr( "DIAGNOSTIC DRY RUN: No EEPROM or calibration file will be written.\n\n"
+                                                         "Short-circuit both inputs and slowly select all voltage gain settings." ),
                                                      QMessageBox::Apply | QMessageBox::Abort, QMessageBox::Abort ) );
             if ( verboseLevel > 2 )
                 qDebug() << "  Calibrate offset" << active;

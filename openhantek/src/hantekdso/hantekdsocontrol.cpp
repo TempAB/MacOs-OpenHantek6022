@@ -7,6 +7,7 @@
 
 #include <QtCore>
 
+#include "calibrationdiagnostics.h" // CAL_DIAG_TEMP: Temporary dry-run logger.
 #include "hantekdsocontrol.h"
 #include "mathchannel.h"
 #include "scopesettings.h"
@@ -24,6 +25,8 @@ HantekDsoControl::HantekDsoControl( ScopeDevice *device, const DSOModel *model, 
         qDebug() << " HantekDsoControl::HantekDsoControl()";
     qRegisterMetaType< DSOsamples * >();
     qRegisterMetaType< QList< double > >();
+    calibrationDiagnostics =
+        std::unique_ptr< CalibrationDiagnostics >( new CalibrationDiagnostics ); // CAL_DIAG_TEMP: Remove on production branch.
 
     if ( device && specification->fixedUSBinLength )
         device->overwriteInPacketLength( unsigned( specification->fixedUSBinLength ) );
@@ -596,6 +599,14 @@ Dso::ErrorCode HantekDsoControl::getCalibrationFromIniFile() {
 
 
 Dso::ErrorCode HantekDsoControl::updateCalibrationValues( bool useEEPROM ) {
+    // CAL_DIAG_TEMP: The diagnostic build must never update EEPROM or the calibration file.
+    if ( calibrationDiagnosticDryRun ) {
+        calibrationHasChanged = false;
+        calibrationDiagnostics->note(
+            QString( "PERSISTENCE_SUPPRESSED requestedTarget=%1" ).arg( useEEPROM ? "EEPROM" : "iniFile" ) );
+        return Dso::ErrorCode::NONE;
+    }
+
     if ( calibrationHasChanged ) {
         if ( verboseLevel > 2 )
             qDebug() << "  Write calibration data into" << ( useEEPROM ? "EEPROM" : "iniFile" );
@@ -748,11 +759,44 @@ Dso::ErrorCode HantekDsoControl::writeCalibrationToEEPROM() {
 
 void HantekDsoControl::calibrateOffset( bool enable ) {
     if ( enable ) {
-        if ( !scope->liveCalibrationActive )
+        if ( !scope->liveCalibrationActive ) {
             memcpy( controlsettings.correctionValues, controlsettings.calibrationValues, sizeof( CalibrationValues ) );
+            // CAL_DIAG_TEMP: Capture the exact baseline and source before any live correction.
+            QString modelName;
+            QString serialNumber;
+            {
+                QReadLocker locker( &scopeDeviceLock );
+                if ( scopeDevice ) {
+                    modelName = scopeDevice->getModel()->name;
+                    serialNumber = scopeDevice->getSerialNumber();
+                }
+            }
+            QString source = replaceCalibrationEEPROM ? "ini-replaces-eeprom" : "ini-plus-eeprom";
+            if ( !specification->hasCalibrationEEPROM )
+                source = "ini-fallback";
+            const QString calibrationFile = calibrationSettings ? calibrationSettings->fileName() : QString();
+            if ( calibrationDiagnostics->begin( modelName, serialNumber, calibrationFile, source,
+                                                controlsettings.calibrationValues, sizeof( CalibrationValues ) ) ) {
+                for ( unsigned gainIndex = 0; gainIndex < HANTEK_GAIN_STEPS; ++gainIndex )
+                    for ( unsigned channel = 0; channel < HANTEK_CHANNEL_NUMBER; ++channel )
+                        calibrationDiagnostics->logCorrection( gainIndex, channel, offsetCorrection[ gainIndex ][ channel ],
+                                                               gainCorrection[ gainIndex ][ channel ] );
+                calibrationDiagnostics->note( "SESSION_START" );
+                const QString message = tr( "Dry-run calibration log: %1" ).arg( CalibrationDiagnostics::logFilePath() );
+                qInfo().noquote() << message;
+                emit statusMessage( message, 0 );
+            } else {
+                const QString message =
+                    tr( "Unable to create dry-run calibration log: %1" ).arg( CalibrationDiagnostics::logFilePath() );
+                qWarning().noquote() << message;
+                emit statusMessage( message, 0 );
+            }
+        }
     } else {
-        if ( scope->liveCalibrationActive )
-            calibrationHasChanged = true;
+        // CAL_DIAG_TEMP: End the in-memory session without enabling persistence.
+        calibrationDiagnostics->note(
+            QString( "SESSION_STOP wasActive=%1 persistenceSuppressed=true" ).arg( scope->liveCalibrationActive ) );
+        calibrationHasChanged = false;
     }
 }
 
@@ -913,20 +957,37 @@ void HantekDsoControl::convertRawDataToSamples() {
         liveOffset /= resultSamples;
 
         if ( scope->liveCalibrationActive ) {
+            // CAL_DIAG_TEMP: Record the exact current decision without changing its behavior.
+            const double proposedOffset = liveOffset + offsetCalibration;
+            const uint8_t proposedRaw = offsetToRaw( proposedOffset );
+            const uint8_t proposedFine = offsetToFine( proposedOffset );
+            QString decision = "accept";
+            if ( maxValue - minValue > 10 && liveOffset > 20 )
+                decision = "reject:spread+positive-offset";
+            else if ( maxValue - minValue > 10 )
+                decision = "reject:spread";
+            else if ( liveOffset > 20 )
+                decision = "reject:positive-offset";
+            else if ( !proposedRaw || !proposedFine )
+                decision = "accept:encoding-produced-zero";
+            calibrationDiagnostics->logFrame( raw.tag, channel, gainIndex, raw.gainValue[ channel ], result.samplerate,
+                                              rawOversampling, resultSamples, skipSamples, minValue, maxValue, liveOffset,
+                                              offsetCalibration, proposedOffset, proposedRaw, proposedFine, decision );
+
             if ( maxValue - minValue > 10 || liveOffset > 20 ) { // big jitter/noise, offset too big
+                calibrationDiagnostics->note( QString( "LIVE_CALIBRATION_ERROR tag=%1 channel=%2 gainIndex=%3" )
+                                                  .arg( raw.tag )
+                                                  .arg( channel )
+                                                  .arg( gainIndex ) );
                 emit liveCalibrationError();                     // stop live calibration without storing something
             } else {
                 offsetCorrection[ gainIndex ][ channel ] = liveOffset;
                 if ( result.samplerate < 30e6 ) {
-                    controlsettings.correctionValues->off.ls.step[ gainIndex ][ channel ] =
-                        offsetToRaw( liveOffset + offsetCalibration );
-                    controlsettings.correctionValues->fine.ls.step[ gainIndex ][ channel ] =
-                        offsetToFine( liveOffset + offsetCalibration );
+                    controlsettings.correctionValues->off.ls.step[ gainIndex ][ channel ] = proposedRaw;
+                    controlsettings.correctionValues->fine.ls.step[ gainIndex ][ channel ] = proposedFine;
                 } else {
-                    controlsettings.correctionValues->off.hs.step[ gainIndex ][ channel ] =
-                        offsetToRaw( liveOffset + offsetCalibration );
-                    controlsettings.correctionValues->fine.hs.step[ gainIndex ][ channel ] =
-                        offsetToFine( liveOffset + offsetCalibration );
+                    controlsettings.correctionValues->off.hs.step[ gainIndex ][ channel ] = proposedRaw;
+                    controlsettings.correctionValues->fine.hs.step[ gainIndex ][ channel ] = proposedFine;
                 }
                 controlsettings.correctionValues->gain.step[ gainIndex ][ channel ] = gainToByte( gainCorr * gainCalibration );
             }

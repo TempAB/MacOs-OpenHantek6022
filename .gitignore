@@ -18,3 +18,6 @@ firmware/hex
 ui_*.h
 *.sh
 .DS_Store
+
+# CAL_DIAG_TEMP: Local output from codex/calibration-diagnostics.
+diagnostic-logs/
