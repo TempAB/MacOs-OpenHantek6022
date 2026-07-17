@@ -129,7 +129,19 @@ jobs:
                   unbundled=1
                   ;;
               esac
-            done < <(otool -L "${candidate}" | tail -n +2)
+            done < <(
+              otool -l "${candidate}" |
+                awk '
+                  $1 == "cmd" && $2 ~ /^LC_(LOAD|LOAD_WEAK|REEXPORT|LOAD_UPWARD|LAZY_LOAD)_DYLIB$/ {
+                    load_command = 1
+                    next
+                  }
+                  load_command && $1 == "name" {
+                    print $2
+                    load_command = 0
+                  }
+                '
+            )
           done < <(find "${app_path}" -type f -print0)
 
           if [[ "${unbundled}" -ne 0 ]]; then
