@@ -5,6 +5,7 @@
 #include <QDebug>
 #include <QFile>
 #include <QSaveFile>
+#include <QSettings>
 #include <QTimer>
 
 #include <QtCore>
@@ -570,40 +571,40 @@ Dso::ErrorCode HantekDsoControl::getCalibrationFromIniFile() {
     if ( verboseLevel > 2 )
         qDebug() << "  Calibration data:" << calName + ".ini";
 
-    calibrationSettings = std::unique_ptr< QSettings >(
-        new QSettings( QSettings::IniFormat, QSettings::UserScope, QCoreApplication::organizationName(), calName ) );
+    QSettings calibrationSettings( QSettings::IniFormat, QSettings::UserScope, QCoreApplication::organizationName(), calName );
+    calibrationFileName = calibrationSettings.fileName();
 
     // load the offsets (persistent, saved at shutdown as "*.ini" file,  )
-    calibrationSettings->beginGroup( "offset" );
+    calibrationSettings.beginGroup( "offset" );
     for ( int ch = 0; ch < HANTEK_CHANNEL_NUMBER; ++ch ) {
-        calibrationSettings->beginGroup( "ch" + QString::number( ch ) );
+        calibrationSettings.beginGroup( "ch" + QString::number( ch ) );
         int index = 0;
         for ( const auto &g : model->spec()->gain ) {
             offsetCorrection[ index ][ ch ] =
-                calibrationSettings->value( ( QString::number( int( g.Vdiv * 1000 ) ) + "mV" ), 0.0 ).toDouble();
+                calibrationSettings.value( ( QString::number( int( g.Vdiv * 1000 ) ) + "mV" ), 0.0 ).toDouble();
             ++index;
         }
-        calibrationSettings->endGroup();
+        calibrationSettings.endGroup();
     }
-    calibrationSettings->endGroup();
+    calibrationSettings.endGroup();
 
     // load the gain (provided by user)
-    calibrationSettings->beginGroup( "gain" );
+    calibrationSettings.beginGroup( "gain" );
     for ( int ch = 0; ch < 2; ++ch ) {
-        calibrationSettings->beginGroup( "ch" + QString::number( ch ) );
+        calibrationSettings.beginGroup( "ch" + QString::number( ch ) );
         int index = 0;
         for ( const auto &g : model->spec()->gain ) {
             gainCorrection[ index ][ ch ] =
-                calibrationSettings->value( ( QString::number( int( g.Vdiv * 1000 ) ) + "mV" ), 1.0 ).toDouble();
+                calibrationSettings.value( ( QString::number( int( g.Vdiv * 1000 ) ) + "mV" ), 1.0 ).toDouble();
             ++index;
         }
-        calibrationSettings->endGroup();
+        calibrationSettings.endGroup();
     }
-    calibrationSettings->endGroup(); // gain
+    calibrationSettings.endGroup(); // gain
 
-    calibrationSettings->beginGroup( "eeprom" );
-    replaceCalibrationEEPROM = calibrationSettings->value( "replace_eeprom", false ).toBool();
-    calibrationSettings->endGroup(); // eeprom
+    calibrationSettings.beginGroup( "eeprom" );
+    replaceCalibrationEEPROM = calibrationSettings.value( "replace_eeprom", false ).toBool();
+    calibrationSettings.endGroup(); // eeprom
 
     if ( replaceCalibrationEEPROM ) // values created by python tool "calibrate_6022.py" replace the EEPROM content
         memset( controlsettings.calibrationValues, 0xFF, sizeof( CalibrationValues ) );
@@ -615,18 +616,12 @@ Dso::ErrorCode HantekDsoControl::getCalibrationFromIniFile() {
 
 
 bool HantekDsoControl::saveOffsetCalibration() {
-    if ( !calibrationSettings ) {
+    if ( calibrationFileName.isEmpty() ) {
         emit statusMessage( tr( "Offset calibration not saved: no calibration INI file is available." ), 0 );
         return false;
     }
 
-    calibrationSettings->sync();
-    if ( calibrationSettings->status() != QSettings::NoError ) {
-        emit statusMessage( tr( "Offset calibration not saved: the calibration INI file is not writable." ), 0 );
-        return false;
-    }
-
-    const QString filePath = calibrationSettings->fileName();
+    const QString filePath = calibrationFileName;
     const QString backupPath = filePath + ".bak";
     const bool hadCalibrationFile = QFileInfo::exists( filePath );
     if ( hadCalibrationFile && !copyFileAtomically( filePath, backupPath ) ) {
@@ -634,21 +629,25 @@ bool HantekDsoControl::saveOffsetCalibration() {
         return false;
     }
 
-    calibrationSettings->beginGroup( "offset" );
-    for ( int channel = 0; channel < HANTEK_CHANNEL_NUMBER; ++channel ) {
-        calibrationSettings->beginGroup( "ch" + QString::number( channel ) );
-        int gainIndex = 0;
-        for ( const auto &gain : model->spec()->gain ) {
-            const double offset = round( 100.0 * offsetCorrection[ gainIndex ][ channel ] ) / 100.0;
-            calibrationSettings->setValue( QString::number( int( gain.Vdiv * 1000 ) ) + "mV", offset );
-            ++gainIndex;
+    bool verified = false;
+    {
+        QSettings calibrationSettings( filePath, QSettings::IniFormat );
+        calibrationSettings.beginGroup( "offset" );
+        for ( int channel = 0; channel < HANTEK_CHANNEL_NUMBER; ++channel ) {
+            calibrationSettings.beginGroup( "ch" + QString::number( channel ) );
+            int gainIndex = 0;
+            for ( const auto &gain : model->spec()->gain ) {
+                const double offset = round( 100.0 * offsetCorrection[ gainIndex ][ channel ] ) / 100.0;
+                calibrationSettings.setValue( QString::number( int( gain.Vdiv * 1000 ) ) + "mV", offset );
+                ++gainIndex;
+            }
+            calibrationSettings.endGroup();
         }
-        calibrationSettings->endGroup();
+        calibrationSettings.endGroup();
+        calibrationSettings.sync();
+        verified = calibrationSettings.status() == QSettings::NoError;
     }
-    calibrationSettings->endGroup();
-    calibrationSettings->sync();
 
-    bool verified = calibrationSettings->status() == QSettings::NoError;
     QSettings verification( filePath, QSettings::IniFormat );
     verification.beginGroup( "offset" );
     for ( int channel = 0; verified && channel < HANTEK_CHANNEL_NUMBER; ++channel ) {
@@ -671,7 +670,6 @@ bool HantekDsoControl::saveOffsetCalibration() {
     verified = verified && verification.status() == QSettings::NoError;
 
     if ( !verified ) {
-        calibrationSettings.reset();
         const bool restored = hadCalibrationFile ? copyFileAtomically( backupPath, filePath )
                                                  : ( !QFileInfo::exists( filePath ) || QFile::remove( filePath ) );
         getCalibrationFromIniFile();

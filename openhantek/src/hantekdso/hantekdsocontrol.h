@@ -25,8 +25,8 @@
 
 #include <vector>
 
-#include <QSettings>
 #include <QReadWriteLock>
+#include <QString>
 #include <QThread>
 
 class CapturingThread;
@@ -193,7 +193,7 @@ class HantekDsoControl : public QObject {
     DSOsamples result;
     unsigned expectedSampleCount = 0; ///< The expected total number of samples at
                                       /// the last check before sampling started
-    std::unique_ptr< QSettings > calibrationSettings;
+    QString calibrationFileName;
     double offsetCorrection[ HANTEK_GAIN_STEPS ][ HANTEK_CHANNEL_NUMBER ];
     double gainCorrection[ HANTEK_GAIN_STEPS ][ HANTEK_CHANNEL_NUMBER ];
     bool offsetCalibrationActive = false;
