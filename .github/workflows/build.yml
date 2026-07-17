@@ -80,23 +80,15 @@ jobs:
 
           mkdir -p "${frameworks_path}"
 
-          bundle_args=()
-          while IFS= read -r -d '' candidate; do
-            if [[ "$(file -b "${candidate}")" == *"Mach-O"* ]]; then
-              bundle_args+=(-x "${candidate}")
-            fi
-          done < <(find "${app_path}" -type f -print0)
-
           dylibbundler \
             -b \
             -cd \
             -of \
-            "${bundle_args[@]}" \
+            -x "${binary_path}" \
             -d "${frameworks_path}" \
             -p "@executable_path/../Frameworks/" \
             -s "$(brew --prefix libusb)/lib" \
-            -s "$(brew --prefix fftw)/lib" \
-            -s "$(brew --prefix qt@6)/lib"
+            -s "$(brew --prefix fftw)/lib"
 
           xattr -cr "${app_path}"
           codesign --force --deep --sign - "${app_path}"
@@ -123,6 +115,7 @@ jobs:
               continue
             fi
 
+            relative_candidate="${candidate#"${GITHUB_WORKSPACE}/"}"
             while IFS= read -r dependency; do
               dependency="${dependency#"${dependency%%[![:space:]]*}"}"
               dependency="${dependency%% (*}"
@@ -131,7 +124,8 @@ jobs:
                 ""|@*|/usr/lib/*|/System/Library/*)
                   ;;
                 *)
-                  echo "::error file=${candidate}::Unbundled dependency: ${dependency}"
+                  echo "Unbundled dependency in ${relative_candidate}: ${dependency}"
+                  echo "::error file=${relative_candidate}::Unbundled dependency: ${dependency}"
                   unbundled=1
                   ;;
               esac
