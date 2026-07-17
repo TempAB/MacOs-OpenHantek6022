@@ -6,6 +6,7 @@
 #include <QFile>
 #include <QSaveFile>
 #include <QSettings>
+#include <QStandardPaths>
 #include <QTimer>
 
 #include <QtCore>
@@ -38,6 +39,37 @@ static bool copyFileAtomically( const QString &sourcePath, const QString &target
 
     QFile verification( targetPath );
     return verification.open( QIODevice::ReadOnly ) && verification.readAll() == contents;
+}
+
+
+static QString calibrationFilePath( const QString &calibrationName ) {
+    QSettings legacySettings( QSettings::IniFormat, QSettings::UserScope, QCoreApplication::organizationName(),
+                              calibrationName );
+    const QString legacyPath = legacySettings.fileName();
+
+#if defined( Q_OS_MAC )
+    const QString applicationDataPath = QStandardPaths::writableLocation( QStandardPaths::AppDataLocation );
+    if ( applicationDataPath.isEmpty() )
+        return legacyPath;
+
+    const QString calibrationDirectory = QDir( applicationDataPath ).filePath( "Calibration" );
+    if ( !QDir().mkpath( calibrationDirectory ) ) {
+        qWarning() << "Unable to create calibration directory" << calibrationDirectory << "- using" << legacyPath;
+        return legacyPath;
+    }
+
+    const QString preferredPath = QDir( calibrationDirectory ).filePath( calibrationName + ".ini" );
+    if ( !QFileInfo::exists( preferredPath ) && QFileInfo::exists( legacyPath ) ) {
+        if ( !copyFileAtomically( legacyPath, preferredPath ) ) {
+            qWarning() << "Unable to migrate calibration file from" << legacyPath << "to" << preferredPath;
+            return legacyPath;
+        }
+        qInfo() << "Migrated calibration file from" << legacyPath << "to" << preferredPath;
+    }
+    return preferredPath;
+#else
+    return legacyPath;
+#endif
 }
 
 
@@ -559,7 +591,9 @@ unsigned HantekDsoControl::getRecordLength() const {
 
 Dso::ErrorCode HantekDsoControl::getCalibrationFromIniFile() {
     // Persistent storage: unique offset/gain calibration file:
-    // Linux, Unix, macOS: "$HOME/.config/OpenHantek/DSO-6022BE_NNNNNNNNNNNN_calibration.ini"
+    // Linux, Unix: "$HOME/.config/OpenHantek/DSO-6022BE_NNNNNNNNNNNN_calibration.ini"
+    // macOS: "$HOME/Library/Application Support/OpenHantek6022/Calibration/"
+    //        "DSO-6022BE_NNNNNNNNNNNN_calibration.ini"
     // Windows: "%APPDATA%\OpenHantek\DSO-6022BE_NNNNNNNNNNNN_calibration.ini"
     QString calName;
     {
@@ -571,8 +605,8 @@ Dso::ErrorCode HantekDsoControl::getCalibrationFromIniFile() {
     if ( verboseLevel > 2 )
         qDebug() << "  Calibration data:" << calName + ".ini";
 
-    QSettings calibrationSettings( QSettings::IniFormat, QSettings::UserScope, QCoreApplication::organizationName(), calName );
-    calibrationFileName = calibrationSettings.fileName();
+    calibrationFileName = calibrationFilePath( calName );
+    QSettings calibrationSettings( calibrationFileName, QSettings::IniFormat );
 
     // load the offsets (persistent, saved at shutdown as "*.ini" file,  )
     calibrationSettings.beginGroup( "offset" );

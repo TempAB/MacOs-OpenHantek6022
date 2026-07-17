@@ -53,6 +53,7 @@
      <string>&amp;Oscilloscope</string>
     </property>
     <addaction name="actionSettings"/>
+    <addaction name="actionShowCalibrationFolder"/>
     <addaction name="separator"/>
     <addaction name="actionCalibrateOffset"/>
     <addaction name="separator"/>
@@ -207,6 +208,11 @@
   <action name="actionSettings">
    <property name="text">
     <string>&amp;Settings ..</string>
+   </property>
+  </action>
+  <action name="actionShowCalibrationFolder">
+   <property name="text">
+    <string>Show Calibration &amp;Folder ..</string>
    </property>
   </action>
   <action name="actionCalibrateOffset">

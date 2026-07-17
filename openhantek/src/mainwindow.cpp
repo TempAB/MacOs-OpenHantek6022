@@ -25,6 +25,7 @@
 #include <QDesktopServices>
 #include <QDir>
 #include <QFileDialog>
+#include <QFileInfo>
 #include <QLoggingCategory>
 #include <QMessageBox>
 #include <QPainter>
@@ -33,6 +34,7 @@
 #include <QPrinter>
 #include <QSignalBlocker>
 #include <QTimer>
+#include <QUrl>
 #include <QValidator>
 
 #include "OH_VERSION.h"
@@ -239,6 +241,13 @@ MainWindow::MainWindow( HantekDsoControl *dsoControl, DsoSettings *settings, Exp
         commandEdit->hide();
         statusBar()->addPermanentWidget( commandEdit, 1 );
 
+        const QString calibrationFolder = QFileInfo( dsoControl->getCalibrationFileName() ).absolutePath();
+        connect( ui->actionShowCalibrationFolder, &QAction::triggered, this, [ this, calibrationFolder ]() {
+            if ( !QDir().mkpath( calibrationFolder ) ||
+                 !QDesktopServices::openUrl( QUrl::fromLocalFile( calibrationFolder ) ) )
+                statusBar()->showMessage( tr( "Unable to open calibration folder: %1" ).arg( calibrationFolder ), 5000 );
+        } );
+
         connect( ui->actionCalibrateOffset, &QAction::toggled, this, [ this, dsoControl, scope ]( bool active ) {
             if ( active ) {
                 active = ( QMessageBox::Apply ==
@@ -282,6 +291,7 @@ MainWindow::MainWindow( HantekDsoControl *dsoControl, DsoSettings *settings, Exp
         } );
 
     } else { // do not show these actions
+        ui->actionShowCalibrationFolder->setVisible( false );
         ui->actionCalibrateOffset->setVisible( false );
         ui->actionManualCommand->setVisible( false );
     }

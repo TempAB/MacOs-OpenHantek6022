@@ -98,6 +98,9 @@ class HantekDsoControl : public QObject {
     /// Return the associated scope model.
     const DSOModel *getModel() const { return model; }
 
+    /// Return the device-specific calibration INI path selected during construction.
+    QString getCalibrationFileName() const { return calibrationFileName; }
+
 
     /// \brief Sends control commands directly.
     /// <p>
