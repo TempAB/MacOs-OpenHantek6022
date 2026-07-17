@@ -193,6 +193,12 @@ On macOS, calibration files are stored in
 `~/.config/OpenHantek` is copied and verified automatically the first time the new location is used; the original is
 retained as a migration backup. Use *Oscilloscope/Show Calibration Folder* to reveal the active folder in Finder.
 
+For the first EEPROM safety stage, *Oscilloscope/Prepare EEPROM Safety Files (Read Only)* reads the 80-byte
+calibration region twice and requires both reads to match. It then creates a timestamped folder under
+`Calibration/EEPROM Backups` containing the exact EEPROM backup, a snapshot of the active INI file, a proposed
+low-speed-offset image, SHA-256 checksums, and a readable change report. This action never writes the EEPROM or
+changes the active INI file. The proposed image must be reviewed before EEPROM writing is implemented or enabled.
+
 ### OpenGL Support
 OpenHantek6022 uses the *OpenGL* graphics library to display the data. It requires a graphics card that supports
 3D rendering and runs on legacy HW/SW that supports at least *OpenGL* 2.1+ or *OpenGL ES* 1.2+.

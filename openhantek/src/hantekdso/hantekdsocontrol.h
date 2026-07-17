@@ -144,7 +144,6 @@ class HantekDsoControl : public QObject {
     Dso::ErrorCode getCalibrationFromIniFile();
     Dso::ErrorCode getCalibrationFromEEPROM();
     bool saveOffsetCalibration();
-    Dso::ErrorCode writeCalibrationToEEPROM();
     void resetOffsetCalibration();
     void processOffsetCalibrationFrame( ChannelID channel, unsigned gainIndex, double liveOffset, bool clipped );
     unsigned completedOffsetCalibrationRanges() const;
@@ -329,6 +328,9 @@ class HantekDsoControl : public QObject {
     /// \brief enable/disable offset calibration
     void calibrateOffset( bool enable );
 
+    /// Create verified backup/candidate files without writing the device EEPROM.
+    void prepareEEPROMCalibrationDryRun();
+
   signals:
     void showSamplingStatus( bool enabled );                   ///< The oscilloscope started/stopped sampling/waiting for trigger
     void statusMessage( const QString &message, int timeout ); ///< Status message about the oscilloscope
@@ -346,6 +348,9 @@ class HantekDsoControl : public QObject {
     void deviceAvailabilityChanged( bool available );
 
     void offsetCalibrationStateChanged( bool active ) const;
+
+    void eepromCalibrationDryRunFinished( bool success, const QString &directoryPath, const QString &reportPath,
+                                          const QString &message ) const;
 };
 
 Q_DECLARE_METATYPE( DSOsamples * )

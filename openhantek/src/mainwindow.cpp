@@ -32,6 +32,7 @@
 #include <QPalette>
 #include <QPrintDialog>
 #include <QPrinter>
+#include <QPushButton>
 #include <QSignalBlocker>
 #include <QTimer>
 #include <QUrl>
@@ -117,6 +118,8 @@ MainWindow::MainWindow( HantekDsoControl *dsoControl, DsoSettings *settings, Exp
     ui->actionExit->setToolTip( tr( "Exit the application" ) );
     ui->actionSettings->setIcon( QIcon( iconPath + "settings.svg" ) );
     ui->actionSettings->setToolTip( tr( "Define scope settings, analysis parameters and colors" ) );
+    ui->actionPrepareEEPROMCalibrationDryRun->setToolTip(
+        tr( "Create verified EEPROM backup and candidate files without writing the oscilloscope" ) );
     ui->actionCalibrateOffset->setIcon( QIcon( iconPath + "offset.svg" ) );
     ui->actionCalibrateOffset->setToolTip( tr( "Short-circuit both inputs and slowly select all voltage gain settings" ) );
     ui->actionManualCommand->setIcon( QIcon( iconPath + "terminal.svg" ) );
@@ -229,7 +232,7 @@ MainWindow::MainWindow( HantekDsoControl *dsoControl, DsoSettings *settings, Exp
 
     deviceCommandWidgets = { voltageDock, horizontalDock, triggerDock, spectrumDock, dsoWidget };
     deviceCommandActions = { ui->actionOpen, ui->actionSampling, ui->actionRefresh, ui->actionCalibrateOffset,
-                             ui->actionManualCommand };
+                             ui->actionPrepareEEPROMCalibrationDryRun, ui->actionManualCommand };
 
     if ( dsoControl->getDevice()->isRealHW() ) { // enable online calibration and manual command input
         // Command field inside the status bar
@@ -247,6 +250,52 @@ MainWindow::MainWindow( HantekDsoControl *dsoControl, DsoSettings *settings, Exp
                  !QDesktopServices::openUrl( QUrl::fromLocalFile( calibrationFolder ) ) )
                 statusBar()->showMessage( tr( "Unable to open calibration folder: %1" ).arg( calibrationFolder ), 5000 );
         } );
+
+        ui->actionPrepareEEPROMCalibrationDryRun->setVisible( spec->hasCalibrationEEPROM );
+        if ( spec->hasCalibrationEEPROM ) {
+            connect( ui->actionPrepareEEPROMCalibrationDryRun, &QAction::triggered, this, [ this, dsoControl ]() {
+                const auto answer = QMessageBox::warning(
+                    this, tr( "Prepare EEPROM Safety Files" ),
+                    tr( "This is a read-only safety step. It will:\n"
+                        "• read the 80-byte calibration region twice,\n"
+                        "• save and verify an exact EEPROM backup,\n"
+                        "• snapshot the saved calibration INI file,\n"
+                        "• create a proposed low-speed offset image and a readable report.\n\n"
+                        "It will NOT write the EEPROM or change the active INI file. Complete offset calibration first.\n\n"
+                        "Continue?" ),
+                    QMessageBox::Yes | QMessageBox::Cancel, QMessageBox::Cancel );
+                if ( answer != QMessageBox::Yes )
+                    return;
+
+                ui->actionPrepareEEPROMCalibrationDryRun->setEnabled( false );
+                QMetaObject::invokeMethod( dsoControl, "prepareEEPROMCalibrationDryRun", Qt::QueuedConnection );
+            } );
+
+            connect( dsoControl, &HantekDsoControl::eepromCalibrationDryRunFinished, this,
+                     [ this, dsoControl ]( bool success, const QString &directoryPath, const QString &reportPath,
+                                          const QString &message ) {
+                         ui->actionPrepareEEPROMCalibrationDryRun->setEnabled( dsoControl->isDeviceAvailable() );
+                         if ( !success ) {
+                             QMessageBox::warning( this, tr( "EEPROM Safety Preparation Failed" ), message );
+                             return;
+                         }
+
+                         QMessageBox result( QMessageBox::Information, tr( "EEPROM Safety Files Ready" ),
+                                             tr( "The verified read-only safety bundle was created.\n\n"
+                                                 "EEPROM NOT WRITTEN\n\n"
+                                                 "Report:\n%1" )
+                                                 .arg( reportPath ),
+                                             QMessageBox::NoButton, this );
+                         QPushButton *openFolder =
+                             result.addButton( tr( "Open Folder" ), QMessageBox::ActionRole );
+                         result.addButton( QMessageBox::Close );
+                         result.exec();
+                         if ( result.clickedButton() == openFolder &&
+                              !QDesktopServices::openUrl( QUrl::fromLocalFile( directoryPath ) ) )
+                             statusBar()->showMessage(
+                                 tr( "Unable to open EEPROM safety folder: %1" ).arg( directoryPath ), 5000 );
+                     } );
+        }
 
         connect( ui->actionCalibrateOffset, &QAction::toggled, this, [ this, dsoControl, scope ]( bool active ) {
             if ( active ) {
@@ -292,6 +341,7 @@ MainWindow::MainWindow( HantekDsoControl *dsoControl, DsoSettings *settings, Exp
 
     } else { // do not show these actions
         ui->actionShowCalibrationFolder->setVisible( false );
+        ui->actionPrepareEEPROMCalibrationDryRun->setVisible( false );
         ui->actionCalibrateOffset->setVisible( false );
         ui->actionManualCommand->setVisible( false );
     }

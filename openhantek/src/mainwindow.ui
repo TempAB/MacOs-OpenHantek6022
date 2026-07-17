@@ -54,6 +54,7 @@
     </property>
     <addaction name="actionSettings"/>
     <addaction name="actionShowCalibrationFolder"/>
+    <addaction name="actionPrepareEEPROMCalibrationDryRun"/>
     <addaction name="separator"/>
     <addaction name="actionCalibrateOffset"/>
     <addaction name="separator"/>
@@ -213,6 +214,11 @@
   <action name="actionShowCalibrationFolder">
    <property name="text">
     <string>Show Calibration &amp;Folder ..</string>
+   </property>
+  </action>
+  <action name="actionPrepareEEPROMCalibrationDryRun">
+   <property name="text">
+    <string>Prepare EEPROM &amp;Safety Files (Read Only) ..</string>
    </property>
   </action>
   <action name="actionCalibrateOffset">
