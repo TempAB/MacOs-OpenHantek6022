@@ -16,6 +16,7 @@
 #include "dockwindows.h"
 
 #include "scopesettings.h"
+#include "selectorbehavior.h"
 #include "sispinbox.h"
 #include "utils/printutils.h"
 
@@ -54,6 +55,7 @@ HorizontalDock::HorizontalDock( DsoSettingsScope *scope, const Dso::ControlSpeci
 
     formatLabel = new QLabel( tr( "Format" ) );
     formatComboBox = new QComboBox();
+    enableSelectorWheelBehavior( formatComboBox );
     if ( scope->toolTipVisible )
         formatComboBox->setToolTip( tr( "Select signal over time or XY display" ) );
     for ( Dso::GraphFormat format : Dso::GraphFormatEnum )
@@ -63,6 +65,7 @@ HorizontalDock::HorizontalDock( DsoSettingsScope *scope, const Dso::ControlSpeci
     calfreqSteps = spec->calfreqSteps;
     std::reverse( calfreqSteps.begin(), calfreqSteps.end() ); // put highest value on top of the list
     calfreqComboBox = new QComboBox();
+    enableSelectorWheelBehavior( calfreqComboBox );
     if ( scope->toolTipVisible )
         calfreqComboBox->setToolTip( tr( "Select the frequency of the calibration output, scroll for fast change" ) );
     for ( double calfreqStep : std::as_const( calfreqSteps ) )

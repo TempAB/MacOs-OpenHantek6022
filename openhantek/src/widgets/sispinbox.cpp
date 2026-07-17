@@ -169,7 +169,7 @@ void SiSpinBox::init() {
     setMaximum( 1e12 );
     setValue( 1.0 );
     setDecimals( DBL_MAX_10_EXP + DBL_DIG ); // Disable automatic rounding
-    setFocusPolicy( Qt::NoFocus );
+    setFocusPolicy( Qt::WheelFocus );
     steps << 1.0 << 2.0 << 5.0 << 10.0;
 
     steppedTo = false;

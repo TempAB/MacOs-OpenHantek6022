@@ -9,6 +9,7 @@
 
 #include "VoltageDock.h"
 #include "dockwindows.h"
+#include "selectorbehavior.h"
 #include "utils/printutils.h"
 
 
@@ -55,6 +56,8 @@ VoltageDock::VoltageDock( DsoSettingsScope *scope, const Dso::ControlSpecificati
             b.usedCheckBox = new QCheckBox( tr( "MA&TH" ) );
         b.miscComboBox = new QComboBox();
         b.gainComboBox = new QComboBox();
+        enableSelectorWheelBehavior( b.miscComboBox );
+        enableSelectorWheelBehavior( b.gainComboBox );
         if ( scope->toolTipVisible )
             b.gainComboBox->setToolTip( tr( "Voltage range per vertical screen division" ) );
         b.invertCheckBox = new QCheckBox( tr( "Invert" ) );

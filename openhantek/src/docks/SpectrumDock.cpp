@@ -15,6 +15,7 @@
 #include "dockwindows.h"
 
 #include "dsosettings.h"
+#include "selectorbehavior.h"
 #include "sispinbox.h"
 #include "utils/printutils.h"
 
@@ -46,6 +47,7 @@ SpectrumDock::SpectrumDock( DsoSettingsScope *scope, QWidget *parent ) : QDockWi
     for ( channel = 0; channel < scope->voltage.size(); ++channel ) {
         ChannelBlock b;
         b.magnitudeComboBox = ( new QComboBox() );
+        enableSelectorWheelBehavior( b.magnitudeComboBox );
         if ( scope->toolTipVisible )
             b.magnitudeComboBox->setToolTip( tr( "Magnitude per vertical screen division" ) );
         QString name = scope->spectrum[ channel ].name;
