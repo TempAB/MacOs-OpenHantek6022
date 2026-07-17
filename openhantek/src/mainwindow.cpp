@@ -22,6 +22,7 @@
 
 #include "dsosettings.h"
 
+#include <QCheckBox>
 #include <QDesktopServices>
 #include <QDir>
 #include <QFileDialog>
@@ -119,7 +120,7 @@ MainWindow::MainWindow( HantekDsoControl *dsoControl, DsoSettings *settings, Exp
     ui->actionSettings->setIcon( QIcon( iconPath + "settings.svg" ) );
     ui->actionSettings->setToolTip( tr( "Define scope settings, analysis parameters and colors" ) );
     ui->actionPrepareEEPROMCalibrationDryRun->setToolTip(
-        tr( "Create verified EEPROM backup and candidate files without writing the oscilloscope" ) );
+        tr( "Prepare a verified backup and optionally perform a guarded EEPROM calibration update" ) );
     ui->actionCalibrateOffset->setIcon( QIcon( iconPath + "offset.svg" ) );
     ui->actionCalibrateOffset->setToolTip( tr( "Short-circuit both inputs and slowly select all voltage gain settings" ) );
     ui->actionManualCommand->setIcon( QIcon( iconPath + "terminal.svg" ) );
@@ -254,21 +255,41 @@ MainWindow::MainWindow( HantekDsoControl *dsoControl, DsoSettings *settings, Exp
         ui->actionPrepareEEPROMCalibrationDryRun->setVisible( spec->hasCalibrationEEPROM );
         if ( spec->hasCalibrationEEPROM ) {
             connect( ui->actionPrepareEEPROMCalibrationDryRun, &QAction::triggered, this, [ this, dsoControl ]() {
-                const auto answer = QMessageBox::warning(
-                    this, tr( "Prepare EEPROM Safety Files" ),
-                    tr( "This is a read-only safety step. It will:\n"
-                        "• read the 80-byte calibration region twice,\n"
-                        "• save and verify an exact EEPROM backup,\n"
-                        "• snapshot the saved calibration INI file,\n"
-                        "• create a proposed low-speed offset image and a readable report.\n\n"
-                        "It will NOT write the EEPROM or change the active INI file. Complete offset calibration first.\n\n"
-                        "Continue?" ),
-                    QMessageBox::Yes | QMessageBox::Cancel, QMessageBox::Cancel );
-                if ( answer != QMessageBox::Yes )
+                QMessageBox choice( QMessageBox::Information, tr( "EEPROM Calibration Safety" ),
+                                    tr( "The application will first read the 80-byte calibration region twice and "
+                                        "create a verified backup, INI snapshot, candidate, checksums, and report.\n\n"
+                                        "Leave the advanced option unchecked for a read-only dry run." ),
+                                    QMessageBox::Apply | QMessageBox::Cancel, this );
+                auto *updateEEPROM =
+                    new QCheckBox( tr( "Also back up and update the device EEPROM (advanced)" ), &choice );
+                updateEEPROM->setChecked( false );
+                choice.setCheckBox( updateEEPROM );
+                choice.setDefaultButton( QMessageBox::Cancel );
+                choice.button( QMessageBox::Apply )->setText( tr( "Continue" ) );
+                if ( choice.exec() != QMessageBox::Apply )
                     return;
 
+                const bool writeRequested = updateEEPROM->isChecked();
+                if ( writeRequested ) {
+                    const auto confirmation = QMessageBox::critical(
+                        this, tr( "Confirm Physical EEPROM Update" ),
+                        tr( "This will permanently change only the low-speed calibration bytes in the connected "
+                            "oscilloscope.\n\n"
+                            "Before writing, a fresh verified backup will be created. Four aligned 8-byte chunks will "
+                            "be written, followed by a complete 80-byte readback. Any detected failure will trigger an "
+                            "automatic rollback and another readback.\n\n"
+                            "A power loss, unplugged cable, or hardware failure during the write could still require "
+                            "manual recovery from the saved backup.\n\n"
+                            "Do you explicitly authorize this one EEPROM update?" ),
+                        QMessageBox::Yes | QMessageBox::Cancel, QMessageBox::Cancel );
+                    if ( confirmation != QMessageBox::Yes )
+                        return;
+                }
+
                 ui->actionPrepareEEPROMCalibrationDryRun->setEnabled( false );
-                QMetaObject::invokeMethod( dsoControl, "prepareEEPROMCalibrationDryRun", Qt::QueuedConnection );
+                QMetaObject::invokeMethod(
+                    dsoControl, writeRequested ? "updateEEPROMCalibrationSafely" : "prepareEEPROMCalibrationDryRun",
+                    Qt::QueuedConnection );
             } );
 
             connect( dsoControl, &HantekDsoControl::eepromCalibrationDryRunFinished, this,
@@ -286,6 +307,30 @@ MainWindow::MainWindow( HantekDsoControl *dsoControl, DsoSettings *settings, Exp
                                                  "Report:\n%1" )
                                                  .arg( reportPath ),
                                              QMessageBox::NoButton, this );
+                         QPushButton *openFolder =
+                             result.addButton( tr( "Open Folder" ), QMessageBox::ActionRole );
+                         result.addButton( QMessageBox::Close );
+                         result.exec();
+                         if ( result.clickedButton() == openFolder &&
+                              !QDesktopServices::openUrl( QUrl::fromLocalFile( directoryPath ) ) )
+                             statusBar()->showMessage(
+                                 tr( "Unable to open EEPROM safety folder: %1" ).arg( directoryPath ), 5000 );
+                     } );
+
+            connect( dsoControl, &HantekDsoControl::eepromCalibrationUpdateFinished, this,
+                     [ this, dsoControl ]( bool success, bool rollbackSucceeded, const QString &directoryPath,
+                                          const QString &reportPath, const QString &message ) {
+                         ui->actionPrepareEEPROMCalibrationDryRun->setEnabled( dsoControl->isDeviceAvailable() );
+                         const QMessageBox::Icon icon =
+                             success ? QMessageBox::Information
+                                     : ( rollbackSucceeded ? QMessageBox::Warning : QMessageBox::Critical );
+                         const QString title =
+                             success ? tr( "EEPROM Update Verified" )
+                                     : ( rollbackSucceeded ? tr( "EEPROM Update Stopped Safely" )
+                                                           : tr( "EEPROM Recovery Required" ) );
+                         const QString details =
+                             reportPath.isEmpty() ? message : message + tr( "\n\nTransaction report:\n%1" ).arg( reportPath );
+                         QMessageBox result( icon, title, details, QMessageBox::NoButton, this );
                          QPushButton *openFolder =
                              result.addButton( tr( "Open Folder" ), QMessageBox::ActionRole );
                          result.addButton( QMessageBox::Close );

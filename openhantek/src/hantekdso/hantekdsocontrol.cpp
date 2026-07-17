@@ -8,6 +8,7 @@
 #include <QSaveFile>
 #include <QSettings>
 #include <QStandardPaths>
+#include <QTemporaryFile>
 #include <QTimer>
 
 #include <QtCore>
@@ -19,6 +20,74 @@
 
 using namespace Hantek;
 using namespace Dso;
+
+struct EEPROMCalibrationBundle {
+    QString outputDirectory;
+    QString reportPath;
+    QString originalPath;
+    QString candidatePath;
+    QString iniSnapshotPath;
+    QString checksumsPath;
+    QString timestamp;
+    QString deviceModel;
+    QString deviceSerial;
+    QByteArray originalBytes;
+    QByteArray candidateBytes;
+    QByteArray iniContents;
+    QByteArray preparationReport;
+    double persistedOffset[ HANTEK_GAIN_STEPS ][ HANTEK_CHANNEL_NUMBER ] = {};
+    double persistedHighSpeedOffset[ HANTEK_GAIN_STEPS ][ HANTEK_CHANNEL_NUMBER ] = {};
+};
+
+
+static bool readCalibrationRegion( ScopeDevice *device, QByteArray &contents, QString &errorMessage ) {
+    ControlGetCalibration command;
+    const int result = device->controlRead( &command );
+    if ( result != int( sizeof( CalibrationValues ) ) ) {
+        errorMessage = result < 0 ? libUsbErrorString( result )
+                                  : QString( "received %1 of %2 bytes" )
+                                        .arg( result )
+                                        .arg( int( sizeof( CalibrationValues ) ) );
+        return false;
+    }
+
+    contents = QByteArray( reinterpret_cast< const char * >( command.data() ), int( sizeof( CalibrationValues ) ) );
+    return true;
+}
+
+
+static bool writeLowSpeedCalibrationRegions( ScopeDevice *device, const QByteArray &contents, QString &errorMessage ) {
+    if ( contents.size() != int( sizeof( CalibrationValues ) ) ) {
+        errorMessage = "the calibration image is not exactly 80 bytes";
+        return false;
+    }
+
+    struct Chunk {
+        int imageOffset;
+        int eepromAddress;
+    };
+    const Chunk chunks[] = { { 0, 8 }, { 8, 16 }, { 48, 56 }, { 56, 64 } };
+    for ( const Chunk &chunk : chunks ) {
+        QByteArray data = contents.mid( chunk.imageOffset, 8 );
+        const int result = device->controlTransfer(
+            uint8_t( LIBUSB_REQUEST_TYPE_VENDOR ) | uint8_t( LIBUSB_ENDPOINT_OUT ),
+            uint8_t( ControlCode::CONTROL_EEPROM ), reinterpret_cast< unsigned char * >( data.data() ),
+            unsigned( data.size() ), chunk.eepromAddress, 0 );
+        if ( result != data.size() ) {
+            errorMessage =
+                result < 0
+                    ? libUsbErrorString( result )
+                    : QString( "wrote %1 of %2 bytes at EEPROM address 0x%3" )
+                          .arg( result )
+                          .arg( data.size() )
+                          .arg( chunk.eepromAddress, 2, 16, QLatin1Char( '0' ) );
+            return false;
+        }
+        QThread::msleep( 25 ); // allow the EEPROM write cycle to complete before the next aligned chunk
+    }
+    return true;
+}
+
 
 static bool writeFileAtomically( const QString &targetPath, const QByteArray &contents ) {
     QSaveFile target( targetPath );
@@ -661,6 +730,22 @@ Dso::ErrorCode HantekDsoControl::getCalibrationFromIniFile() {
     }
     calibrationSettings.endGroup();
 
+    separateHighSpeedOffsetCorrection = calibrationSettings.childGroups().contains( "offset_high" );
+    calibrationSettings.beginGroup( "offset_high" );
+    for ( int ch = 0; ch < HANTEK_CHANNEL_NUMBER; ++ch ) {
+        calibrationSettings.beginGroup( "ch" + QString::number( ch ) );
+        int index = 0;
+        for ( const auto &g : model->spec()->gain ) {
+            highSpeedOffsetCorrection[ index ][ ch ] =
+                calibrationSettings
+                    .value( QString::number( int( g.Vdiv * 1000 ) ) + "mV", offsetCorrection[ index ][ ch ] )
+                    .toDouble();
+            ++index;
+        }
+        calibrationSettings.endGroup();
+    }
+    calibrationSettings.endGroup();
+
     // load the gain (provided by user)
     calibrationSettings.beginGroup( "gain" );
     for ( int ch = 0; ch < 2; ++ch ) {
@@ -752,6 +837,9 @@ bool HantekDsoControl::saveOffsetCalibration() {
         return false;
     }
 
+    if ( !separateHighSpeedOffsetCorrection )
+        memcpy( highSpeedOffsetCorrection, offsetCorrection, sizeof( offsetCorrection ) );
+
     emit statusMessage(
         hadCalibrationFile
             ? tr( "Offset calibration saved to %1. Previous settings: %2" ).arg( filePath, backupPath )
@@ -761,47 +849,43 @@ bool HantekDsoControl::saveOffsetCalibration() {
 }
 
 
-void HantekDsoControl::prepareEEPROMCalibrationDryRun() {
-    QString outputDirectory;
-    const auto fail = [ this, &outputDirectory ]( const QString &reason ) {
-        QString message =
-            tr( "EEPROM safety preparation failed: %1 EEPROM NOT WRITTEN." ).arg( reason );
-        if ( !outputDirectory.isEmpty() )
-            message += tr( " Partial safety folder: %1" ).arg( outputDirectory );
-        emit statusMessage( message, 0 );
-        emit eepromCalibrationDryRunFinished( false, outputDirectory, QString(), message );
+bool HantekDsoControl::prepareEEPROMCalibrationBundle( bool writeRequested, EEPROMCalibrationBundle &bundle,
+                                                        QString &errorMessage ) {
+    const auto fail = [ this, &bundle, &errorMessage ]( const QString &reason ) {
+        errorMessage = tr( "EEPROM safety preparation failed: %1 EEPROM NOT WRITTEN." ).arg( reason );
+        if ( !bundle.outputDirectory.isEmpty() )
+            errorMessage += tr( " Partial safety folder: %1" ).arg( bundle.outputDirectory );
     };
 
     static_assert( sizeof( CalibrationValues ) == 80, "Unexpected EEPROM calibration layout" );
     if ( offsetCalibrationActive ) {
         fail( tr( "finish or cancel offset calibration first." ) );
-        return;
+        return false;
     }
     if ( replaceCalibrationEEPROM ) {
         fail( tr( "the INI file is configured to replace, rather than enhance, EEPROM calibration." ) );
-        return;
+        return false;
     }
     if ( model->spec()->gain.size() != HANTEK_GAIN_STEPS ) {
         fail( tr( "the oscilloscope does not use the expected eight-range calibration layout." ) );
-        return;
+        return false;
     }
     if ( calibrationFileName.isEmpty() || !QFileInfo::exists( calibrationFileName ) ) {
         fail( tr( "complete and save offset calibration before preparing EEPROM files." ) );
-        return;
+        return false;
     }
 
     QFile iniFile( calibrationFileName );
     if ( !iniFile.open( QIODevice::ReadOnly ) ) {
         fail( tr( "the saved INI file could not be opened for its safety snapshot." ) );
-        return;
+        return false;
     }
-    const QByteArray iniContents = iniFile.readAll();
+    bundle.iniContents = iniFile.readAll();
     if ( iniFile.error() != QFileDevice::NoError ) {
         fail( tr( "the saved INI file could not be read for its safety snapshot." ) );
-        return;
+        return false;
     }
 
-    double persistedOffset[ HANTEK_GAIN_STEPS ][ HANTEK_CHANNEL_NUMBER ] = {};
     QSettings persistedSettings( calibrationFileName, QSettings::IniFormat );
     persistedSettings.beginGroup( "offset" );
     for ( int channel = 0; channel < HANTEK_CHANNEL_NUMBER; ++channel ) {
@@ -813,74 +897,85 @@ void HantekDsoControl::prepareEEPROMCalibrationDryRun() {
                 persistedSettings.endGroup();
                 persistedSettings.endGroup();
                 fail( tr( "the saved INI file does not contain all 16 calibrated ranges." ) );
-                return;
+                return false;
             }
             const double value = persistedSettings.value( key ).toDouble();
             if ( !qIsFinite( value ) ) {
                 persistedSettings.endGroup();
                 persistedSettings.endGroup();
                 fail( tr( "the saved INI file contains a non-numeric offset." ) );
-                return;
+                return false;
             }
-            persistedOffset[ gainIndex ][ channel ] = value;
+            bundle.persistedOffset[ gainIndex ][ channel ] = value;
         }
         persistedSettings.endGroup();
     }
     persistedSettings.endGroup();
+
+    persistedSettings.beginGroup( "offset_high" );
+    for ( int channel = 0; channel < HANTEK_CHANNEL_NUMBER; ++channel ) {
+        persistedSettings.beginGroup( "ch" + QString::number( channel ) );
+        for ( int gainIndex = 0; gainIndex < HANTEK_GAIN_STEPS; ++gainIndex ) {
+            const QString key =
+                QString::number( int( model->spec()->gain[ gainIndex ].Vdiv * 1000 ) ) + "mV";
+            const double value =
+                persistedSettings.value( key, bundle.persistedOffset[ gainIndex ][ channel ] ).toDouble();
+            if ( !qIsFinite( value ) ) {
+                persistedSettings.endGroup();
+                persistedSettings.endGroup();
+                fail( tr( "the saved INI file contains a non-numeric high-speed offset." ) );
+                return false;
+            }
+            bundle.persistedHighSpeedOffset[ gainIndex ][ channel ] = value;
+        }
+        persistedSettings.endGroup();
+    }
+    persistedSettings.endGroup();
+
     if ( persistedSettings.status() != QSettings::NoError ) {
         fail( tr( "the saved INI file could not be read reliably." ) );
-        return;
+        return false;
     }
 
     QFile iniVerification( calibrationFileName );
     if ( !iniVerification.open( QIODevice::ReadOnly ) ) {
         fail( tr( "the saved INI file could not be reopened for verification." ) );
-        return;
+        return false;
     }
     const QByteArray verifiedIniContents = iniVerification.readAll();
-    if ( iniVerification.error() != QFileDevice::NoError || verifiedIniContents != iniContents ) {
+    if ( iniVerification.error() != QFileDevice::NoError || verifiedIniContents != bundle.iniContents ) {
         fail( tr( "the saved INI file changed while its calibration values were being read." ) );
-        return;
+        return false;
     }
 
-    ControlGetCalibration firstReadCommand;
-    ControlGetCalibration secondReadCommand;
-    QString deviceModel;
-    QString deviceSerial;
-    int firstRead = -1;
-    int secondRead = -1;
+    QByteArray verificationBytes;
     {
         QWriteLocker locker( &scopeDeviceLock );
         if ( !scopeDevice || deviceConnectionState != DeviceConnectionState::Connected || !scopeDevice->isConnected() ||
              !scopeDevice->isRealHW() || !specification->hasCalibrationEEPROM ) {
             fail( tr( "a connected physical oscilloscope with calibration EEPROM is required." ) );
-            return;
+            return false;
         }
 
-        deviceModel = scopeDevice->getModel()->name;
-        deviceSerial = scopeDevice->getSerialNumber();
-        firstRead = scopeDevice->controlRead( &firstReadCommand );
-        secondRead = scopeDevice->controlRead( &secondReadCommand );
+        bundle.deviceModel = scopeDevice->getModel()->name;
+        bundle.deviceSerial = scopeDevice->getSerialNumber();
+        QString readError;
+        if ( !readCalibrationRegion( scopeDevice, bundle.originalBytes, readError ) ||
+             !readCalibrationRegion( scopeDevice, verificationBytes, readError ) ) {
+            fail( tr( "two complete 80-byte EEPROM reads could not be obtained: %1." ).arg( readError ) );
+            return false;
+        }
     }
 
-    if ( firstRead != int( sizeof( CalibrationValues ) ) || secondRead != int( sizeof( CalibrationValues ) ) ) {
-        fail( tr( "two complete 80-byte EEPROM reads could not be obtained." ) );
-        return;
-    }
-
-    const QByteArray originalBytes( reinterpret_cast< const char * >( firstReadCommand.data() ),
-                                    int( sizeof( CalibrationValues ) ) );
-    const QByteArray verificationBytes( reinterpret_cast< const char * >( secondReadCommand.data() ),
-                                        int( sizeof( CalibrationValues ) ) );
-    if ( originalBytes != verificationBytes ) {
+    if ( bundle.originalBytes != verificationBytes ) {
         fail( tr( "two consecutive EEPROM reads did not match." ) );
-        return;
+        return false;
     }
 
     CalibrationValues originalValues = {};
     CalibrationValues candidateValues = {};
-    memcpy( &originalValues, originalBytes.constData(), sizeof( CalibrationValues ) );
-    memcpy( &candidateValues, originalBytes.constData(), sizeof( CalibrationValues ) );
+    memcpy( &originalValues, bundle.originalBytes.constData(), sizeof( CalibrationValues ) );
+    memcpy( &candidateValues, bundle.originalBytes.constData(), sizeof( CalibrationValues ) );
 
     QString calculationReport;
     QTextStream calculations( &calculationReport );
@@ -894,12 +989,12 @@ void HantekDsoControl::prepareEEPROMCalibrationDryRun() {
             const bool originalBytesValid =
                 validCalibrationByte( originalRaw ) && validCalibrationByte( originalFine );
             const double originalOffset = bytesToOffset( originalRaw, originalFine );
-            const double proposedOffset = originalOffset + persistedOffset[ gainIndex ][ channel ];
+            const double proposedOffset = originalOffset + bundle.persistedOffset[ gainIndex ][ channel ];
             uint8_t candidateRaw = 0;
             uint8_t candidateFine = 0;
             if ( !offsetToBytes( proposedOffset, candidateRaw, candidateFine ) ) {
                 fail( tr( "a proposed low-speed offset cannot be represented safely in EEPROM." ) );
-                return;
+                return false;
             }
 
             candidateValues.off.ls.step[ gainIndex ][ channel ] = candidateRaw;
@@ -914,7 +1009,7 @@ void HantekDsoControl::prepareEEPROMCalibrationDryRun() {
                          << QString::number( fineAddress, 16 ).toUpper() << "\t"
                          << ( originalBytesValid ? "EEPROM value" : "invalid bytes -> app default" ) << "\t"
                          << QString::number( originalOffset, 'f', 3 ) << "\t"
-                         << QString::number( persistedOffset[ gainIndex ][ channel ], 'f', 3 ) << "\t"
+                         << QString::number( bundle.persistedOffset[ gainIndex ][ channel ], 'f', 3 ) << "\t"
                          << QString::number( bytesToOffset( candidateRaw, candidateFine ), 'f', 3 ) << "\t0x"
                          << hexByte( originalRaw ) << "/0x" << hexByte( originalFine ) << "\t0x"
                          << hexByte( candidateRaw ) << "/0x" << hexByte( candidateFine ) << "\n";
@@ -925,58 +1020,65 @@ void HantekDsoControl::prepareEEPROMCalibrationDryRun() {
          memcmp( &originalValues.gain, &candidateValues.gain, sizeof( originalValues.gain ) ) != 0 ||
          memcmp( &originalValues.fine.hs, &candidateValues.fine.hs, sizeof( originalValues.fine.hs ) ) != 0 ) {
         fail( tr( "the candidate changed protected high-speed or gain calibration bytes." ) );
-        return;
+        return false;
     }
 
-    const QByteArray candidateBytes( reinterpret_cast< const char * >( &candidateValues ),
-                                     int( sizeof( CalibrationValues ) ) );
-    for ( int index = 0; index < candidateBytes.size(); ++index ) {
+    bundle.candidateBytes =
+        QByteArray( reinterpret_cast< const char * >( &candidateValues ), int( sizeof( CalibrationValues ) ) );
+    for ( int index = 0; index < bundle.candidateBytes.size(); ++index ) {
         const bool permittedLowSpeedByte = index < 16 || ( index >= 48 && index < 64 );
-        if ( candidateBytes[ index ] != originalBytes[ index ] && !permittedLowSpeedByte ) {
+        if ( bundle.candidateBytes[ index ] != bundle.originalBytes[ index ] && !permittedLowSpeedByte ) {
             fail( tr( "the candidate changed a byte outside the two permitted low-speed offset regions." ) );
-            return;
+            return false;
         }
     }
 
-    const QString timestamp = QDateTime::currentDateTimeUtc().toString( "yyyyMMdd'T'HHmmsszzz'Z'" );
+    bundle.timestamp = QDateTime::currentDateTimeUtc().toString( "yyyyMMdd'T'HHmmsszzz'Z'" );
     const QString deviceDirectory = QFileInfo( calibrationFileName ).completeBaseName();
-    outputDirectory = QDir( QFileInfo( calibrationFileName ).absolutePath() )
-                          .filePath( "EEPROM Backups/" + deviceDirectory + "/" + timestamp );
-    if ( !QDir().mkpath( outputDirectory ) ) {
+    bundle.outputDirectory =
+        QDir( QFileInfo( calibrationFileName ).absolutePath() )
+            .filePath( "EEPROM Backups/" + deviceDirectory + "/" + bundle.timestamp );
+    if ( !QDir().mkpath( bundle.outputDirectory ) ) {
         fail( tr( "the safety output folder could not be created." ) );
-        return;
+        return false;
     }
 
-    const QString originalPath =
-        QDir( outputDirectory ).filePath( "eeprom-calibration-original-80-bytes.bin" );
-    const QString candidatePath =
-        QDir( outputDirectory ).filePath( "eeprom-calibration-candidate-80-bytes-NOT-WRITTEN.bin" );
-    const QString iniSnapshotPath =
-        QDir( outputDirectory ).filePath( "calibration-ini-snapshot.ini" );
-    const QString reportPath = QDir( outputDirectory ).filePath( "EEPROM-dry-run-report.txt" );
-    const QString checksumsPath = QDir( outputDirectory ).filePath( "SHA256SUMS.txt" );
+    bundle.originalPath =
+        QDir( bundle.outputDirectory ).filePath( "eeprom-calibration-original-80-bytes.bin" );
+    bundle.candidatePath =
+        QDir( bundle.outputDirectory )
+            .filePath( writeRequested ? "eeprom-calibration-candidate-80-bytes.bin"
+                                      : "eeprom-calibration-candidate-80-bytes-NOT-WRITTEN.bin" );
+    bundle.iniSnapshotPath =
+        QDir( bundle.outputDirectory ).filePath( "calibration-ini-snapshot.ini" );
+    bundle.reportPath =
+        QDir( bundle.outputDirectory )
+            .filePath( writeRequested ? "EEPROM-pre-write-safety-report.txt" : "EEPROM-dry-run-report.txt" );
+    bundle.checksumsPath = QDir( bundle.outputDirectory ).filePath( "SHA256SUMS.txt" );
 
-    if ( !writeFileAtomically( originalPath, originalBytes ) ) {
+    if ( !writeFileAtomically( bundle.originalPath, bundle.originalBytes ) ) {
         fail( tr( "the original EEPROM backup could not be saved and verified." ) );
-        return;
+        return false;
     }
-    if ( !writeFileAtomically( iniSnapshotPath, iniContents ) ) {
+    if ( !writeFileAtomically( bundle.iniSnapshotPath, bundle.iniContents ) ) {
         fail( tr( "the calibration INI snapshot could not be saved and verified." ) );
-        return;
+        return false;
     }
-    if ( !writeFileAtomically( candidatePath, candidateBytes ) ) {
+    if ( !writeFileAtomically( bundle.candidatePath, bundle.candidateBytes ) ) {
         fail( tr( "the read-only candidate image could not be saved and verified." ) );
-        return;
+        return false;
     }
 
     QString reportText;
     QTextStream report( &reportText );
-    report << "OpenHantek6022 EEPROM calibration safety dry run\n"
-           << "================================================\n\n"
-           << "RESULT: EEPROM NOT WRITTEN\n\n"
-           << "UTC timestamp: " << timestamp << "\n"
-           << "Device model: " << deviceModel << "\n"
-           << "Device serial: " << deviceSerial << "\n"
+    report << ( writeRequested ? "OpenHantek6022 EEPROM pre-write safety preparation\n"
+                               : "OpenHantek6022 EEPROM calibration safety dry run\n" )
+           << "====================================================\n\n"
+           << ( writeRequested ? "STATUS AT PREPARATION: EEPROM NOT YET WRITTEN\n\n"
+                               : "RESULT: EEPROM NOT WRITTEN\n\n" )
+           << "UTC timestamp: " << bundle.timestamp << "\n"
+           << "Device model: " << bundle.deviceModel << "\n"
+           << "Device serial: " << bundle.deviceSerial << "\n"
            << "Calibration region: 80 bytes at EEPROM addresses 0x08 through 0x57\n"
            << "INI source: " << calibrationFileName << "\n\n"
            << "Safety checks completed:\n"
@@ -989,42 +1091,396 @@ void HantekDsoControl::prepareEEPROMCalibrationDryRun() {
            << "- High-speed offsets, gain calibration, and all other bytes are unchanged.\n"
            << "- Invalid original offset byte pairs are shown explicitly and interpreted as centre 128,\n"
            << "  matching the application's existing calibration behaviour.\n"
-           << "- No USB write command was issued. The active INI file was not changed.\n\n"
+           << "- No USB write command had been issued when this preparation report was created.\n"
+           << "- The active INI file had not been changed when this preparation report was created.\n\n"
            << "Files:\n"
-           << "- Original EEPROM backup: " << originalPath << "\n"
-           << "- Proposed image (not written): " << candidatePath << "\n"
-           << "- Calibration INI snapshot: " << iniSnapshotPath << "\n"
-           << "- Checksums: " << checksumsPath << "\n\n"
+           << "- Original EEPROM backup: " << bundle.originalPath << "\n"
+           << "- Proposed image (not yet written): " << bundle.candidatePath << "\n"
+           << "- Calibration INI snapshot: " << bundle.iniSnapshotPath << "\n"
+           << "- Checksums: " << bundle.checksumsPath << "\n\n"
            << "SHA-256:\n"
-           << "- Original EEPROM: " << sha256( originalBytes ) << "\n"
-           << "- Proposed image: " << sha256( candidateBytes ) << "\n"
-           << "- INI snapshot: " << sha256( iniContents ) << "\n\n"
+           << "- Original EEPROM: " << sha256( bundle.originalBytes ) << "\n"
+           << "- Proposed image: " << sha256( bundle.candidateBytes ) << "\n"
+           << "- INI snapshot: " << sha256( bundle.iniContents ) << "\n\n"
            << "Proposed low-speed offset changes:\n"
-           << calculationReport << "\n"
-           << "This candidate must be reviewed before any EEPROM-writing code is enabled.\n"
-           << "RESULT: EEPROM NOT WRITTEN\n";
+           << calculationReport << "\n";
+    if ( writeRequested )
+        report << "A separate EEPROM-update-result.txt file must record the guarded transaction outcome.\n"
+               << "STATUS AT PREPARATION: EEPROM NOT YET WRITTEN\n";
+    else
+        report << "This candidate must be reviewed before any EEPROM-writing code is enabled.\n"
+               << "RESULT: EEPROM NOT WRITTEN\n";
 
-    const QByteArray reportContents = reportText.toUtf8();
-    if ( !writeFileAtomically( reportPath, reportContents ) ) {
+    bundle.preparationReport = reportText.toUtf8();
+    if ( !writeFileAtomically( bundle.reportPath, bundle.preparationReport ) ) {
         fail( tr( "the human-readable dry-run report could not be saved and verified." ) );
-        return;
+        return false;
     }
 
     QByteArray checksumContents;
-    checksumContents += sha256( originalBytes ) + "  eeprom-calibration-original-80-bytes.bin\n";
-    checksumContents +=
-        sha256( candidateBytes ) + "  eeprom-calibration-candidate-80-bytes-NOT-WRITTEN.bin\n";
-    checksumContents += sha256( iniContents ) + "  calibration-ini-snapshot.ini\n";
-    checksumContents += sha256( reportContents ) + "  EEPROM-dry-run-report.txt\n";
-    if ( !writeFileAtomically( checksumsPath, checksumContents ) ) {
+    checksumContents += sha256( bundle.originalBytes ) + "  eeprom-calibration-original-80-bytes.bin\n";
+    checksumContents += sha256( bundle.candidateBytes ) + "  " +
+                        QFileInfo( bundle.candidatePath ).fileName().toUtf8() + "\n";
+    checksumContents += sha256( bundle.iniContents ) + "  calibration-ini-snapshot.ini\n";
+    checksumContents += sha256( bundle.preparationReport ) + "  " +
+                        QFileInfo( bundle.reportPath ).fileName().toUtf8() + "\n";
+    if ( !writeFileAtomically( bundle.checksumsPath, checksumContents ) ) {
         fail( tr( "the checksum manifest could not be saved and verified." ) );
+        return false;
+    }
+
+    return true;
+}
+
+
+void HantekDsoControl::prepareEEPROMCalibrationDryRun() {
+    EEPROMCalibrationBundle bundle;
+    QString message;
+    if ( !prepareEEPROMCalibrationBundle( false, bundle, message ) ) {
+        emit statusMessage( message, 0 );
+        emit eepromCalibrationDryRunFinished( false, bundle.outputDirectory, QString(), message );
         return;
     }
 
-    const QString message =
-        tr( "EEPROM safety files created at %1. EEPROM NOT WRITTEN." ).arg( outputDirectory );
+    message = tr( "EEPROM safety files created at %1. EEPROM NOT WRITTEN." ).arg( bundle.outputDirectory );
     emit statusMessage( message, 0 );
-    emit eepromCalibrationDryRunFinished( true, outputDirectory, reportPath, message );
+    emit eepromCalibrationDryRunFinished( true, bundle.outputDirectory, bundle.reportPath, message );
+}
+
+
+bool HantekDsoControl::reconcileCalibrationIniAfterEEPROMWrite( const EEPROMCalibrationBundle &bundle,
+                                                                QString &errorMessage ) {
+    QFile currentIni( calibrationFileName );
+    if ( !currentIni.open( QIODevice::ReadOnly ) || currentIni.readAll() != bundle.iniContents ) {
+        errorMessage = tr( "the active calibration INI changed after the safety snapshot." );
+        return false;
+    }
+
+    const QString backupPath = calibrationFileName + ".bak";
+    if ( !writeFileAtomically( backupPath, bundle.iniContents ) ) {
+        errorMessage = tr( "the pre-update INI backup could not be saved and verified." );
+        return false;
+    }
+
+    QTemporaryFile stagedFile(
+        QDir( QFileInfo( calibrationFileName ).absolutePath() ).filePath( ".eeprom-calibration-XXXXXX.ini" ) );
+    stagedFile.setAutoRemove( true );
+    if ( !stagedFile.open() ) {
+        errorMessage = tr( "a temporary INI file could not be created." );
+        return false;
+    }
+    const QString stagedPath = stagedFile.fileName();
+    stagedFile.close();
+
+    {
+        QSettings source( calibrationFileName, QSettings::IniFormat );
+        QSettings staged( stagedPath, QSettings::IniFormat );
+        for ( const QString &key : source.allKeys() )
+            staged.setValue( key, source.value( key ) );
+
+        for ( int channel = 0; channel < HANTEK_CHANNEL_NUMBER; ++channel ) {
+            for ( int gainIndex = 0; gainIndex < HANTEK_GAIN_STEPS; ++gainIndex ) {
+                const QString range =
+                    QString::number( int( model->spec()->gain[ gainIndex ].Vdiv * 1000 ) ) + "mV";
+                staged.setValue( QString( "offset/ch%1/%2" ).arg( channel ).arg( range ), 0.0 );
+                staged.setValue( QString( "offset_high/ch%1/%2" ).arg( channel ).arg( range ),
+                                 bundle.persistedHighSpeedOffset[ gainIndex ][ channel ] );
+            }
+        }
+        staged.setValue( "eeprom/replace_eeprom", false );
+        staged.sync();
+        if ( source.status() != QSettings::NoError || staged.status() != QSettings::NoError ) {
+            errorMessage = tr( "the reconciled INI file could not be staged reliably." );
+            return false;
+        }
+    }
+
+    QFile stagedIni( stagedPath );
+    if ( !stagedIni.open( QIODevice::ReadOnly ) ) {
+        errorMessage = tr( "the staged INI file could not be read." );
+        return false;
+    }
+    const QByteArray stagedContents = stagedIni.readAll();
+    if ( stagedIni.error() != QFileDevice::NoError || !writeFileAtomically( calibrationFileName, stagedContents ) ) {
+        errorMessage = tr( "the reconciled INI file could not be installed atomically." );
+        return false;
+    }
+
+    bool verified = true;
+    QSettings verification( calibrationFileName, QSettings::IniFormat );
+    for ( int channel = 0; verified && channel < HANTEK_CHANNEL_NUMBER; ++channel ) {
+        for ( int gainIndex = 0; gainIndex < HANTEK_GAIN_STEPS; ++gainIndex ) {
+            const QString range =
+                QString::number( int( model->spec()->gain[ gainIndex ].Vdiv * 1000 ) ) + "mV";
+            const double low =
+                verification.value( QString( "offset/ch%1/%2" ).arg( channel ).arg( range ),
+                                    std::numeric_limits< double >::quiet_NaN() )
+                    .toDouble();
+            const double high =
+                verification.value( QString( "offset_high/ch%1/%2" ).arg( channel ).arg( range ),
+                                    std::numeric_limits< double >::quiet_NaN() )
+                    .toDouble();
+            verified = qIsFinite( low ) && qAbs( low ) <= 0.0001 && qIsFinite( high ) &&
+                       qAbs( high - bundle.persistedHighSpeedOffset[ gainIndex ][ channel ] ) <= 0.0001;
+        }
+    }
+    verified = verified && !verification.value( "eeprom/replace_eeprom", true ).toBool() &&
+               verification.status() == QSettings::NoError;
+    if ( verified )
+        return true;
+
+    const bool restored = writeFileAtomically( calibrationFileName, bundle.iniContents );
+    errorMessage =
+        restored ? tr( "the reconciled INI failed verification; the original INI was restored." )
+                 : tr( "the reconciled INI failed verification and the original INI could not be restored." );
+    return false;
+}
+
+
+void HantekDsoControl::updateEEPROMCalibrationSafely() {
+    EEPROMCalibrationBundle bundle;
+    QString message;
+    if ( !prepareEEPROMCalibrationBundle( true, bundle, message ) ) {
+        emit statusMessage( message, 0 );
+        emit eepromCalibrationUpdateFinished( false, true, bundle.outputDirectory, QString(), message );
+        return;
+    }
+
+    const QString readbackPath =
+        QDir( bundle.outputDirectory ).filePath( "eeprom-calibration-readback-after-write-80-bytes.bin" );
+    const QString rollbackReadbackPath =
+        QDir( bundle.outputDirectory ).filePath( "eeprom-calibration-readback-after-rollback-80-bytes.bin" );
+    const QString iniAfterPath =
+        QDir( bundle.outputDirectory ).filePath( "calibration-ini-after-eeprom-update.ini" );
+    const QString resultPath = QDir( bundle.outputDirectory ).filePath( "EEPROM-update-result.txt" );
+    const QString statePath = QDir( bundle.outputDirectory ).filePath( "EEPROM-update-state.txt" );
+    const QString finalChecksumsPath =
+        QDir( bundle.outputDirectory ).filePath( "SHA256SUMS-after-update.txt" );
+
+    bool success = false;
+    bool writeAttempted = false;
+    bool rollbackSucceeded = true;
+    bool iniRestored = true;
+    QByteArray candidateReadback;
+    QByteArray rollbackReadback;
+    QByteArray iniAfterContents;
+    QString transactionError;
+
+    const QByteArray preparedState =
+        QString( "STATE: PREPARED; EEPROM NOT WRITTEN\nUTC timestamp: %1\nOriginal backup: %2\nCandidate: %3\n" )
+            .arg( bundle.timestamp, bundle.originalPath, bundle.candidatePath )
+            .toUtf8();
+    if ( !writeFileAtomically( statePath, preparedState ) )
+        transactionError = tr( "The persistent pre-write state marker could not be saved." );
+
+    {
+        QWriteLocker locker( &scopeDeviceLock );
+        if ( transactionError.isEmpty() &&
+             ( !scopeDevice || deviceConnectionState != DeviceConnectionState::Connected || !scopeDevice->isConnected() ||
+               !scopeDevice->isRealHW() || !specification->hasCalibrationEEPROM ) ) {
+            transactionError = tr( "The oscilloscope disconnected before the guarded update." );
+        }
+
+        QByteArray preWriteReadback;
+        if ( transactionError.isEmpty() ) {
+            QString readError;
+            if ( !readCalibrationRegion( scopeDevice, preWriteReadback, readError ) )
+                transactionError = tr( "The final pre-write EEPROM read failed: %1." ).arg( readError );
+            else if ( preWriteReadback != bundle.originalBytes )
+                transactionError = tr( "The EEPROM changed after its backup was created; the update was cancelled." );
+        }
+
+        if ( transactionError.isEmpty() ) {
+            const QByteArray writingState =
+                QString( "STATE: WRITE IN PROGRESS\nUTC timestamp: %1\nDo not remove this safety folder.\n"
+                         "Original backup: %2\nCandidate: %3\n" )
+                    .arg( bundle.timestamp, bundle.originalPath, bundle.candidatePath )
+                    .toUtf8();
+            if ( !writeFileAtomically( statePath, writingState ) ) {
+                transactionError = tr( "The persistent in-progress state marker could not be saved." );
+            } else {
+                writeAttempted = true;
+                QString writeError;
+                if ( !writeLowSpeedCalibrationRegions( scopeDevice, bundle.candidateBytes, writeError ) )
+                    transactionError = tr( "The limited EEPROM write failed: %1." ).arg( writeError );
+            }
+        }
+
+        if ( transactionError.isEmpty() ) {
+            QString readError;
+            if ( !readCalibrationRegion( scopeDevice, candidateReadback, readError ) )
+                transactionError = tr( "The post-write EEPROM readback failed: %1." ).arg( readError );
+            else if ( candidateReadback != bundle.candidateBytes )
+                transactionError = tr( "The full 80-byte EEPROM readback did not match the candidate." );
+            else if ( !writeFileAtomically( readbackPath, candidateReadback ) )
+                transactionError = tr( "The verified EEPROM readback could not be saved to the safety folder." );
+        }
+
+        if ( transactionError.isEmpty() &&
+             !reconcileCalibrationIniAfterEEPROMWrite( bundle, transactionError ) ) {
+            transactionError = tr( "INI reconciliation failed: %1" ).arg( transactionError );
+        }
+
+        if ( transactionError.isEmpty() ) {
+            QFile iniAfter( calibrationFileName );
+            if ( !iniAfter.open( QIODevice::ReadOnly ) ) {
+                transactionError = tr( "The reconciled INI could not be opened for its final snapshot." );
+            } else {
+                iniAfterContents = iniAfter.readAll();
+                if ( iniAfter.error() != QFileDevice::NoError ||
+                     !writeFileAtomically( iniAfterPath, iniAfterContents ) )
+                    transactionError = tr( "The reconciled INI snapshot could not be saved and verified." );
+            }
+        }
+
+        QByteArray successReport;
+        if ( transactionError.isEmpty() ) {
+            QString reportText;
+            QTextStream report( &reportText );
+            report << "OpenHantek6022 guarded EEPROM calibration update\n"
+                   << "================================================\n\n"
+                   << "RESULT: EEPROM UPDATE VERIFIED\n\n"
+                   << "UTC timestamp: " << bundle.timestamp << "\n"
+                   << "Device model: " << bundle.deviceModel << "\n"
+                   << "Device serial: " << bundle.deviceSerial << "\n\n"
+                   << "Verified transaction:\n"
+                   << "- The original 80-byte calibration region was backed up before writing.\n"
+                   << "- Only four aligned 8-byte chunks were written at EEPROM addresses\n"
+                   << "  0x08, 0x10, 0x38, and 0x40.\n"
+                   << "- A full 80-byte readback matched the candidate exactly.\n"
+                   << "- Protected high-speed, gain, and unrelated bytes remained unchanged.\n"
+                   << "- The pre-update INI is preserved in the safety folder and as "
+                   << calibrationFileName << ".bak.\n"
+                   << "- Active low-speed INI residuals are now zero to prevent double correction.\n"
+                   << "- Previous residuals are retained under [offset_high] for high-speed sampling.\n"
+                   << "- [eeprom] replace_eeprom=false was verified.\n\n"
+                   << "SHA-256:\n"
+                   << "- Original EEPROM: " << sha256( bundle.originalBytes ) << "\n"
+                   << "- Candidate EEPROM: " << sha256( bundle.candidateBytes ) << "\n"
+                   << "- Device readback: " << sha256( candidateReadback ) << "\n"
+                   << "- INI before update: " << sha256( bundle.iniContents ) << "\n"
+                   << "- INI after update: " << sha256( iniAfterContents ) << "\n\n"
+                   << "RESULT: EEPROM UPDATE VERIFIED\n";
+            successReport = reportText.toUtf8();
+            if ( !writeFileAtomically( resultPath, successReport ) )
+                transactionError = tr( "The verified transaction report could not be saved." );
+        }
+
+        if ( transactionError.isEmpty() ) {
+            const QByteArray verifiedState =
+                QString( "STATE: VERIFIED\nUTC timestamp: %1\nEEPROM readback and INI reconciliation succeeded.\n" )
+                    .arg( bundle.timestamp )
+                    .toUtf8();
+            if ( !writeFileAtomically( statePath, verifiedState ) )
+                transactionError = tr( "The verified transaction state marker could not be saved." );
+        }
+
+        if ( transactionError.isEmpty() ) {
+            QByteArray checksums;
+            checksums += sha256( bundle.originalBytes ) + "  eeprom-calibration-original-80-bytes.bin\n";
+            checksums += sha256( bundle.candidateBytes ) + "  " +
+                         QFileInfo( bundle.candidatePath ).fileName().toUtf8() + "\n";
+            checksums += sha256( bundle.iniContents ) + "  calibration-ini-snapshot.ini\n";
+            checksums += sha256( bundle.preparationReport ) + "  EEPROM-pre-write-safety-report.txt\n";
+            checksums +=
+                sha256( candidateReadback ) + "  eeprom-calibration-readback-after-write-80-bytes.bin\n";
+            checksums += sha256( iniAfterContents ) + "  calibration-ini-after-eeprom-update.ini\n";
+            checksums += sha256( successReport ) + "  EEPROM-update-result.txt\n";
+            QFile stateFile( statePath );
+            if ( !stateFile.open( QIODevice::ReadOnly ) ) {
+                transactionError = tr( "The verified state marker could not be reopened." );
+            } else {
+                const QByteArray stateContents = stateFile.readAll();
+                if ( stateFile.error() != QFileDevice::NoError )
+                    transactionError = tr( "The verified state marker could not be read." );
+                else
+                    checksums += sha256( stateContents ) + "  EEPROM-update-state.txt\n";
+            }
+            if ( transactionError.isEmpty() && !writeFileAtomically( finalChecksumsPath, checksums ) )
+                transactionError = tr( "The final checksum manifest could not be saved." );
+        }
+
+        if ( !transactionError.isEmpty() && writeAttempted ) {
+            iniRestored = writeFileAtomically( calibrationFileName, bundle.iniContents );
+
+            QString rollbackError;
+            rollbackSucceeded = writeLowSpeedCalibrationRegions( scopeDevice, bundle.originalBytes, rollbackError );
+            if ( rollbackSucceeded ) {
+                QString readError;
+                rollbackSucceeded = readCalibrationRegion( scopeDevice, rollbackReadback, readError ) &&
+                                    rollbackReadback == bundle.originalBytes;
+                if ( !rollbackSucceeded && rollbackError.isEmpty() )
+                    rollbackError = readError.isEmpty() ? tr( "rollback readback did not match the original backup" )
+                                                        : readError;
+            }
+            if ( !rollbackReadback.isEmpty() )
+                writeFileAtomically( rollbackReadbackPath, rollbackReadback );
+            if ( rollbackSucceeded ) {
+                memcpy( controlsettings.calibrationValues, bundle.originalBytes.constData(), sizeof( CalibrationValues ) );
+            } else {
+                transactionError += tr( " AUTOMATIC ROLLBACK FAILED: %1." ).arg( rollbackError );
+                if ( rollbackReadback.size() == int( sizeof( CalibrationValues ) ) )
+                    memcpy( controlsettings.calibrationValues, rollbackReadback.constData(), sizeof( CalibrationValues ) );
+            }
+            if ( !iniRestored )
+                transactionError += tr( " The original INI file could not be restored." );
+        }
+
+        if ( transactionError.isEmpty() ) {
+            memcpy( controlsettings.calibrationValues, bundle.candidateBytes.constData(), sizeof( CalibrationValues ) );
+            memset( offsetCorrection, 0, sizeof( offsetCorrection ) );
+            memcpy( highSpeedOffsetCorrection, bundle.persistedHighSpeedOffset,
+                    sizeof( highSpeedOffsetCorrection ) );
+            separateHighSpeedOffsetCorrection = true;
+            replaceCalibrationEEPROM = false;
+            success = true;
+        }
+    }
+
+    if ( !success ) {
+        QString failureText;
+        QTextStream failure( &failureText );
+        failure << "OpenHantek6022 guarded EEPROM calibration update\n"
+                << "================================================\n\n"
+                << "RESULT: EEPROM UPDATE FAILED\n\n"
+                << "UTC timestamp: " << bundle.timestamp << "\n"
+                << "Device model: " << bundle.deviceModel << "\n"
+                << "Device serial: " << bundle.deviceSerial << "\n"
+                << "Failure: " << transactionError << "\n"
+                << "EEPROM write attempted: " << ( writeAttempted ? "yes" : "no" ) << "\n"
+                << "Rollback: "
+                << ( writeAttempted ? ( rollbackSucceeded ? "verified" : "FAILED" ) : "not required; no write occurred" )
+                << "\n"
+                << "Original INI restored: " << ( iniRestored ? "yes" : "NO" ) << "\n\n"
+                << ( rollbackSucceeded
+                         ? "The original EEPROM calibration region is verified or no write occurred.\n"
+                         : "Do not perform another EEPROM update. Preserve this safety folder for recovery.\n" )
+                << "RESULT: EEPROM UPDATE FAILED\n";
+        const QByteArray failureReport = failureText.toUtf8();
+        writeFileAtomically( resultPath, failureReport );
+        const QByteArray failureState =
+            QString( "STATE: %1\nUTC timestamp: %2\nFailure: %3\n" )
+                .arg( writeAttempted ? ( rollbackSucceeded ? "ROLLBACK VERIFIED" : "ROLLBACK FAILED" )
+                                     : "CANCELLED BEFORE WRITE",
+                      bundle.timestamp, transactionError )
+                .toUtf8();
+        writeFileAtomically( statePath, failureState );
+
+        message = rollbackSucceeded
+                      ? tr( "EEPROM update cancelled or failed safely; the original data is verified. %1" )
+                            .arg( transactionError )
+                      : tr( "CRITICAL: EEPROM update and automatic rollback failed. %1 Safety folder: %2" )
+                            .arg( transactionError, bundle.outputDirectory );
+        emit statusMessage( message, 0 );
+        if ( !rollbackSucceeded )
+            emit communicationError();
+        emit eepromCalibrationUpdateFinished( false, rollbackSucceeded, bundle.outputDirectory, resultPath, message );
+        return;
+    }
+
+    message = tr( "EEPROM update and readback verified. Safety bundle: %1" ).arg( bundle.outputDirectory );
+    emit statusMessage( message, 0 );
+    emit eepromCalibrationUpdateFinished( true, true, bundle.outputDirectory, resultPath, message );
 }
 
 
@@ -1302,7 +1758,8 @@ void HantekDsoControl::convertRawDataToSamples() {
         result.clipped &= ~( 0x01 << channel );    // clear clipping flag
 
         double gainCorr = gainCorrection[ gainIndex ][ channel ];
-        double offsetCorr = offsetCorrection[ gainIndex ][ channel ];
+        double offsetCorr = result.samplerate < 30e6 ? offsetCorrection[ gainIndex ][ channel ]
+                                                     : highSpeedOffsetCorrection[ gainIndex ][ channel ];
         double liveOffset = 0.0;
         bool calibrationClipped = false;
 

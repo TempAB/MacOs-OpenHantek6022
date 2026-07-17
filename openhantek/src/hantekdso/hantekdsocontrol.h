@@ -31,6 +31,7 @@
 
 class CapturingThread;
 class ScopeDevice;
+struct EEPROMCalibrationBundle;
 
 struct Raw {
     unsigned channels = 0;
@@ -144,6 +145,8 @@ class HantekDsoControl : public QObject {
     Dso::ErrorCode getCalibrationFromIniFile();
     Dso::ErrorCode getCalibrationFromEEPROM();
     bool saveOffsetCalibration();
+    bool prepareEEPROMCalibrationBundle( bool writeRequested, EEPROMCalibrationBundle &bundle, QString &errorMessage );
+    bool reconcileCalibrationIniAfterEEPROMWrite( const EEPROMCalibrationBundle &bundle, QString &errorMessage );
     void resetOffsetCalibration();
     void processOffsetCalibrationFrame( ChannelID channel, unsigned gainIndex, double liveOffset, bool clipped );
     unsigned completedOffsetCalibrationRanges() const;
@@ -197,6 +200,8 @@ class HantekDsoControl : public QObject {
                                       /// the last check before sampling started
     QString calibrationFileName;
     double offsetCorrection[ HANTEK_GAIN_STEPS ][ HANTEK_CHANNEL_NUMBER ];
+    double highSpeedOffsetCorrection[ HANTEK_GAIN_STEPS ][ HANTEK_CHANNEL_NUMBER ];
+    bool separateHighSpeedOffsetCorrection = false;
     double gainCorrection[ HANTEK_GAIN_STEPS ][ HANTEK_CHANNEL_NUMBER ];
     bool offsetCalibrationActive = false;
     double offsetCalibrationOriginal[ HANTEK_GAIN_STEPS ][ HANTEK_CHANNEL_NUMBER ] = {};
@@ -331,6 +336,9 @@ class HantekDsoControl : public QObject {
     /// Create verified backup/candidate files without writing the device EEPROM.
     void prepareEEPROMCalibrationDryRun();
 
+    /// Perform a backed-up, readback-verified low-speed EEPROM update with rollback.
+    void updateEEPROMCalibrationSafely();
+
   signals:
     void showSamplingStatus( bool enabled );                   ///< The oscilloscope started/stopped sampling/waiting for trigger
     void statusMessage( const QString &message, int timeout ); ///< Status message about the oscilloscope
@@ -351,6 +359,9 @@ class HantekDsoControl : public QObject {
 
     void eepromCalibrationDryRunFinished( bool success, const QString &directoryPath, const QString &reportPath,
                                           const QString &message ) const;
+
+    void eepromCalibrationUpdateFinished( bool success, bool rollbackSucceeded, const QString &directoryPath,
+                                          const QString &reportPath, const QString &message ) const;
 };
 
 Q_DECLARE_METATYPE( DSOsamples * )

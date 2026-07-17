@@ -193,11 +193,18 @@ On macOS, calibration files are stored in
 `~/.config/OpenHantek` is copied and verified automatically the first time the new location is used; the original is
 retained as a migration backup. Use *Oscilloscope/Show Calibration Folder* to reveal the active folder in Finder.
 
-For the first EEPROM safety stage, *Oscilloscope/Prepare EEPROM Safety Files (Read Only)* reads the 80-byte
-calibration region twice and requires both reads to match. It then creates a timestamped folder under
-`Calibration/EEPROM Backups` containing the exact EEPROM backup, a snapshot of the active INI file, a proposed
-low-speed-offset image, SHA-256 checksums, and a readable change report. This action never writes the EEPROM or
-changes the active INI file. The proposed image must be reviewed before EEPROM writing is implemented or enabled.
+*Oscilloscope/EEPROM Calibration Safety* always begins by reading the 80-byte calibration region twice and requiring
+both reads to match. It creates a timestamped folder under `Calibration/EEPROM Backups` containing the exact
+calibration-region backup, a snapshot of the active INI file, a proposed low-speed-offset image, SHA-256 checksums,
+and a readable report.
+
+The advanced EEPROM-update checkbox is unchecked by default and is never remembered. When it remains unchecked, the
+action is a read-only dry run and neither the EEPROM nor active INI is changed. Selecting it requires a second
+explicit confirmation. The guarded update writes only four aligned 8-byte low-speed offset chunks, verifies the
+complete 80-byte readback, and automatically restores the original chunks if any write, readback, INI, or audit step
+fails. After a verified update, low-speed INI residuals are zeroed to prevent double correction; the previous
+residuals are retained separately under `[offset_high]` for high-speed sampling. The pre-update INI and EEPROM
+calibration region remain in the timestamped safety folder.
 
 ### OpenGL Support
 OpenHantek6022 uses the *OpenGL* graphics library to display the data. It requires a graphics card that supports

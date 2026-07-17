@@ -218,7 +218,7 @@
   </action>
   <action name="actionPrepareEEPROMCalibrationDryRun">
    <property name="text">
-    <string>Prepare EEPROM &amp;Safety Files (Read Only) ..</string>
+    <string>EEPROM Calibration &amp;Safety ..</string>
    </property>
   </action>
   <action name="actionCalibrateOffset">
