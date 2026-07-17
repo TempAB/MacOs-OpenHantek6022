@@ -188,10 +188,10 @@ The oscilloscope has quite a large zero point error. To calibrate the offset qui
 The offset correction is now active and is saved immediately in the device-specific `*.ini` file. The previous file is
 preserved as `*.ini.bak`. Online offset calibration does not modify the oscilloscope EEPROM.
 
-On macOS, calibration files are stored in `~/Library/Application Support/OpenHantek6022/Calibration`. An existing
-calibration file under `~/.config/OpenHantek` is copied and verified automatically the first time the new location is
-used; the original is retained as a migration backup. Use *Oscilloscope/Show Calibration Folder* to reveal the active
-folder in Finder.
+On macOS, calibration files are stored in
+`~/Library/Application Support/OpenHantek/OpenHantek6022/Calibration`. An existing calibration file under
+`~/.config/OpenHantek` is copied and verified automatically the first time the new location is used; the original is
+retained as a migration backup. Use *Oscilloscope/Show Calibration Folder* to reveal the active folder in Finder.
 
 ### OpenGL Support
 OpenHantek6022 uses the *OpenGL* graphics library to display the data. It requires a graphics card that supports

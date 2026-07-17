@@ -592,7 +592,7 @@ unsigned HantekDsoControl::getRecordLength() const {
 Dso::ErrorCode HantekDsoControl::getCalibrationFromIniFile() {
     // Persistent storage: unique offset/gain calibration file:
     // Linux, Unix: "$HOME/.config/OpenHantek/DSO-6022BE_NNNNNNNNNNNN_calibration.ini"
-    // macOS: "$HOME/Library/Application Support/OpenHantek6022/Calibration/"
+    // macOS: "$HOME/Library/Application Support/OpenHantek/OpenHantek6022/Calibration/"
     //        "DSO-6022BE_NNNNNNNNNNNN_calibration.ini"
     // Windows: "%APPDATA%\OpenHantek\DSO-6022BE_NNNNNNNNNNNN_calibration.ini"
     QString calName;
