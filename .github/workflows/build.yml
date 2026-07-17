@@ -1,482 +1,181 @@
-#
-# build.yml - GitHub build action for OpenHantek6022
-# Copyright (C) 2023- OpenHantek community
-#
-# This program is free software; you can redistribute it and/or modify
-# it under the terms of the GNU General Public License as published by
-# the Free Software Foundation; either version 3 of the License, or
-# (at your option) any later version.
-#
-# This program is distributed in the hope that it will be useful,
-# but WITHOUT ANY WARRANTY; without even the implied warranty of
-# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-# GNU General Public License for more details.
-#
-# You should have received a copy of the GNU General Public License
-# along with this program. If not, see <http://www.gnu.org/licenses/>.
-#
+name: Intel macOS DMG
 
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - main
+      - "codex/**"
 
-name: Build
-# check if OH6022 builds on some recent operating systems
-# deploy Ubuntu / macOS / Windows binaries
-# https://docs.github.com/en/actions/reference/runners/github-hosted-runners
+permissions:
+  contents: read
 
-on: [push]
-
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
 
 env:
-  # CMake build type (Release, Debug, RelWithDebInfo, etc.)
   BUILD_TYPE: Release
 
-
 jobs:
-
-# ----------------------------------
-# --- Linux (Ubuntu) amd64 steps ---
-# ----------------------------------
-#
-  linux-amd64:
-    runs-on: ubuntu-24.04
-    steps:
-
-    # --- Clone the latest commit ---
-    - name: Checkout
-      uses: actions/checkout@v6
-      with:
-        fetch-tags: true
-        submodules: recursive
-        fetch-depth: 0
-
-    # --- Config git and get the version from "git describe" ---
-    - name: Config Git
-      id: config_git
-      shell: bash
-      run: |
-        git config user.email "Ho-Ro@users.noreply.github.com"
-        git config user.name "Ho-Ro"
-        git fetch --tags --force || true
-        echo "git_describe=$(git describe)"
-        echo "git_describe=$(git describe)" >> $GITHUB_OUTPUT
-
-    - name: Install Linux amd64 Build Requirements
-      run: |
-        mkdir build
-        sudo apt update
-        # sudo apt -y upgrade
-        sudo apt install g++ make cmake fakeroot rpm \
-          libfftw3-dev binutils-dev libusb-1.0-0-dev libcups2-dev libxkbcommon-dev \
-          libqt6core6t64 libqt6gui6 libqt6widgets6 libqt6printsupport6 \
-          libqt6opengl6 libqt6openglwidgets6 qt6-tools-dev
-
-    - name: Linux amd64 Build
-      # GitHub hosts Linux runners on Standard_DS2_v2 virtual machines in Microsoft Azure:
-      # 2-core CPU, 7 GB of RAM memory, 14 GB of SSD disk space
-      working-directory: ${{github.workspace}}/build
-      run: |
-        cp ../CHANGELOG changelog
-        cmake .. -DCMAKE_BUILD_TYPE=$BUILD_TYPE
-        make -j8
-        fakeroot make -j8 package
-        ls -l packages
-
-    - name: Upload Linux amd64 Artifacts
-      # *.deb *.rpm *.tgz
-      uses: actions/upload-artifact@v7
-      with:
-        name: openhantek_${{ steps.config_git.outputs.git_describe }}_linux_amd64
-        path: ${{github.workspace}}/build/packages/*
-
-    - name: Upload Linux amd64 Release Assets
-      if: startsWith(github.ref, 'refs/tags/')
-      uses: softprops/action-gh-release@v3
-      with:
-        prerelease: true
-        files: ./build/packages/*
-      env:
-        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-
-
-# ----------------------------------
-# --- Linux (Ubuntu) arm64 steps ---
-# ----------------------------------
-#
-  linux-arm64:
-    runs-on: ubuntu-24.04-arm
-    steps:
-
-    # --- Clone the latest commit ---
-    - name: Checkout
-      uses: actions/checkout@v6
-      with:
-        fetch-tags: true
-        submodules: recursive
-        fetch-depth: 0
-
-    # --- Config git and get the version from "git describe" ---
-    - name: Config Git
-      id: config_git
-      shell: bash
-      run: |
-        git config user.email "Ho-Ro@users.noreply.github.com"
-        git config user.name "Ho-Ro"
-        git fetch --tags --force || true
-        echo "git_describe=$(git describe)"
-        echo "git_describe=$(git describe)" >> $GITHUB_OUTPUT
-
-    - name: Install Linux arm64 Build Requirements
-      run: |
-        mkdir build
-        sudo apt update
-        # sudo apt -y upgrade
-        sudo apt install g++ make cmake fakeroot rpm \
-          libfftw3-dev binutils-dev libusb-1.0-0-dev libcups2-dev libxkbcommon-dev \
-          libqt6core6t64 libqt6gui6 libqt6widgets6 libqt6printsupport6 \
-          libqt6opengl6 libqt6openglwidgets6 qt6-tools-dev
-
-    - name: Linux arm64 Build
-      # GitHub hosts Linux runners on Standard_DS2_v2 virtual machines in Microsoft Azure:
-      # 2-core CPU, 7 GB of RAM memory, 14 GB of SSD disk space
-      working-directory: ${{github.workspace}}/build
-      run: |
-        cp ../CHANGELOG changelog
-        cmake .. -DCMAKE_BUILD_TYPE=$BUILD_TYPE
-        make -j8
-        fakeroot make -j8 package
-        ls -l packages
-
-    - name: Upload Linux arm64 Artifacts
-      # *.deb *.rpm *.tgz
-      uses: actions/upload-artifact@v7
-      with:
-        name: openhantek_${{ steps.config_git.outputs.git_describe }}_linux_arm64
-        path: ${{github.workspace}}/build/packages/*
-
-    - name: Upload Linux arm64 Release Assets
-      if: startsWith(github.ref, 'refs/tags/')
-      uses: softprops/action-gh-release@v3
-      with:
-        prerelease: true
-        files: ./build/packages/*
-      env:
-        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-
-
-# -------------------------
-# --- macOS amd64 steps ---
-# -------------------------
-#
-  macos-amd64:
+  macos-intel:
+    name: Build Intel DMG
     runs-on: macos-15-intel
+    timeout-minutes: 60
+
     steps:
+      - name: Check out source
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+          fetch-tags: true
+          submodules: recursive
 
-    # --- Clone the latest commit ---
-    - name: Checkout
-      uses: actions/checkout@v6
-      with:
-        fetch-tags: true
-        submodules: recursive
-        fetch-depth: 0
+      - name: Determine build version
+        id: metadata
+        shell: bash
+        run: |
+          set -euo pipefail
+          version="$(git describe --tags --always)"
+          version="${version//\//-}"
+          echo "version=${version}" | tee -a "${GITHUB_OUTPUT}"
 
-    # --- Config git and get the version from "git describe" ---
-    - name: Config Git
-      id: config_git
-      shell: bash
-      run: |
-        git config user.email "Ho-Ro@users.noreply.github.com"
-        git config user.name "Ho-Ro"
-        git fetch --tags --force || true
-        echo "git_describe=$(git describe)"
-        echo "git_describe=$(git describe)" >> $GITHUB_OUTPUT
+      - name: Install build and packaging dependencies
+        shell: bash
+        run: |
+          set -euo pipefail
+          brew install libusb fftw qt@6 cmake binutils create-dmg dylibbundler
 
-    - name: Install macOS intel Build Requirements
-      run: |
-        mkdir build
-        brew install qt@6 fftw binutils create-dmg || true
+      - name: Configure
+        shell: bash
+        run: |
+          set -euo pipefail
+          cmake \
+            -S . \
+            -B build \
+            -DCMAKE_BUILD_TYPE="${BUILD_TYPE}" \
+            -DCMAKE_PREFIX_PATH="$(brew --prefix qt@6)" \
+            -DBUILD_MACOSX_BUNDLE=ON
 
-    - name: macOS intel Build
-      # GitHub hosts macOS runners in GitHub's own macOS Cloud:
-      # 4-core CPU, 14 GB of RAM memory, 14 GB of SSD disk space
-      working-directory: ${{github.workspace}}/build
-      run: |
-        cp ../CHANGELOG changelog
-        cmake .. -DCMAKE_BUILD_TYPE=$BUILD_TYPE -DCMAKE_PREFIX_PATH=$(brew --prefix qt@6)
-        make -j16
-        if test -d openhantek/OpenHantek.app; then
-          export PATH=$(brew --prefix qt@6)/bin:${PATH}
-          cd openhantek
-          macdeployqt OpenHantek.app -always-overwrite -verbose=1
-          # Re-sign the app after macdeployqt modifies the bundle
-          # Required on Apple Silicon, recommended on Intel Macs with macOS 11+
-          xattr -cr OpenHantek.app
-          codesign --force --deep --sign - OpenHantek.app
-          #
-          # Verify the signature (optional but recommended)
-          codesign --verify --deep --strict OpenHantek.app
-          create-dmg --volname OpenHantek --volicon ../../openhantek/res/images/OpenHantek.icns \
-            --window-pos 200 120 --window-size 800 400 --icon-size 100 --icon "OpenHantek.app" 200 190 \
-            --skip-jenkins --hide-extension "OpenHantek.app" --app-drop-link 600 185 \
-            --eula ../../LICENSE OpenHantek.dmg OpenHantek.app
-          cd ..
-          sudo make -j16 package
-        else
-          true
-        fi
-        if test -d openhantek/OpenHantek.app; then
-          cd openhantek
-          sudo tar -czf ../packages/openhantek_*_macos_*.tar.gz OpenHantek.app
-          if test -f OpenHantek.dmg; then
-            sudo mv OpenHantek.dmg ../packages/$(basename ../packages/openhantek_*_macos_*.tar.gz .tar.gz).dmg
+      - name: Build
+        shell: bash
+        run: |
+          set -euo pipefail
+          cmake --build build --parallel "$(sysctl -n hw.logicalcpu)"
+
+      - name: Bundle runtime dependencies
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          app_path="${GITHUB_WORKSPACE}/build/openhantek/OpenHantek.app"
+          binary_path="${app_path}/Contents/MacOS/OpenHantek"
+          frameworks_path="${app_path}/Contents/Frameworks"
+
+          test -d "${app_path}"
+          test -x "${binary_path}"
+
+          export PATH="$(brew --prefix qt@6)/bin:${PATH}"
+          macdeployqt "${app_path}" -always-overwrite -verbose=2
+
+          mkdir -p "${frameworks_path}"
+
+          bundle_args=()
+          while IFS= read -r -d '' candidate; do
+            if [[ "$(file -b "${candidate}")" == *"Mach-O"* ]]; then
+              bundle_args+=(-x "${candidate}")
+            fi
+          done < <(find "${app_path}" -type f -print0)
+
+          dylibbundler \
+            -b \
+            -cd \
+            -of \
+            "${bundle_args[@]}" \
+            -d "${frameworks_path}" \
+            -p "@executable_path/../Frameworks/" \
+            -s "$(brew --prefix libusb)/lib" \
+            -s "$(brew --prefix fftw)/lib" \
+            -s "$(brew --prefix qt@6)/lib"
+
+          xattr -cr "${app_path}"
+          codesign --force --deep --sign - "${app_path}"
+          codesign --verify --deep --strict --verbose=2 "${app_path}"
+
+      - name: Verify Intel architecture and portability
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          app_path="${GITHUB_WORKSPACE}/build/openhantek/OpenHantek.app"
+          binary_path="${app_path}/Contents/MacOS/OpenHantek"
+
+          file "${binary_path}"
+          architecture="$(lipo -archs "${binary_path}")"
+          if [[ "${architecture}" != "x86_64" ]]; then
+            echo "::error::Expected x86_64, found ${architecture}"
+            exit 1
           fi
-          cd ..
-          ls -l packages
-        else
-          true
-        fi
 
-    - name: Upload macOS intel Artifacts
-      uses: actions/upload-artifact@v7
-      with:
-        name: openhantek_${{ steps.config_git.outputs.git_describe }}_macos_amd64
-        path: ${{github.workspace}}/build/packages/*
+          unbundled=0
+          while IFS= read -r -d '' candidate; do
+            if [[ "$(file -b "${candidate}")" != *"Mach-O"* ]]; then
+              continue
+            fi
 
-    - name: Upload macOS intel Release Assets
-      if: startsWith(github.ref, 'refs/tags/')
-      uses: softprops/action-gh-release@v3
-      with:
-        prerelease: true
-        files: ./build/packages/*
-      env:
-        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+            while IFS= read -r dependency; do
+              dependency="${dependency#"${dependency%%[![:space:]]*}"}"
+              dependency="${dependency%% (*}"
 
+              case "${dependency}" in
+                ""|@*|/usr/lib/*|/System/Library/*)
+                  ;;
+                *)
+                  echo "::error file=${candidate}::Unbundled dependency: ${dependency}"
+                  unbundled=1
+                  ;;
+              esac
+            done < <(otool -L "${candidate}" | tail -n +2)
+          done < <(find "${app_path}" -type f -print0)
 
-# -------------------------
-# --- macOS arm64 steps ---
-# -------------------------
-#
-  macos-arm64:
-    runs-on: macos-15
-    steps:
-
-    # --- Clone the latest commit ---
-    - name: Checkout
-      uses: actions/checkout@v6
-      with:
-        fetch-tags: true
-        submodules: recursive
-        fetch-depth: 0
-
-    # --- Config git and get the version from "git describe" ---
-    - name: Config Git
-      id: config_git
-      shell: bash
-      run: |
-        git config user.email "Ho-Ro@users.noreply.github.com"
-        git config user.name "Ho-Ro"
-        git fetch --tags --force || true
-        echo "git_describe=$(git describe)"
-        echo "git_describe=$(git describe)" >> $GITHUB_OUTPUT
-
-    - name: Install macOS Build Requirements
-      run: |
-        mkdir build
-        brew install qt@6 fftw binutils create-dmg || true
-
-    - name: macOS arm64 Build
-      # GitHub hosts macOS runners in GitHub's own macOS Cloud:
-      # 3-core M1 CPU, 14 GB of RAM memory, 7 GB of SSD disk space
-      working-directory: ${{github.workspace}}/build
-      run: |
-        cp ../CHANGELOG changelog
-        cmake .. -DCMAKE_BUILD_TYPE=$BUILD_TYPE -DCMAKE_PREFIX_PATH=$(brew --prefix qt@6)
-        make -j12
-        if test -d openhantek/OpenHantek.app; then
-          export PATH=$(brew --prefix qt@6)/bin:${PATH}
-          cd openhantek
-          macdeployqt OpenHantek.app -always-overwrite -verbose=1
-          # Re-sign the app after macdeployqt modifies the bundle
-          # Required on Apple Silicon, recommended on Intel Macs with macOS 11+
-          xattr -cr OpenHantek.app
-          codesign --force --deep --sign - OpenHantek.app
-          #
-          # Verify the signature (optional but recommended)
-          codesign --verify --deep --strict OpenHantek.app
-          create-dmg --volname OpenHantek --volicon ../../openhantek/res/images/OpenHantek.icns \
-            --window-pos 200 120 --window-size 800 400 --icon-size 100 --icon "OpenHantek.app" 200 190 \
-            --skip-jenkins --hide-extension "OpenHantek.app" --app-drop-link 600 185 \
-            --eula ../../LICENSE OpenHantek.dmg OpenHantek.app
-          cd ..
-          sudo make -j12 package
-        else
-          true
-        fi
-        if test -d openhantek/OpenHantek.app; then
-          cd openhantek
-          sudo tar -czf ../packages/openhantek_*_macos_*.tar.gz OpenHantek.app
-          if test -f OpenHantek.dmg; then
-            sudo mv OpenHantek.dmg ../packages/$(basename ../packages/openhantek_*_macos_*.tar.gz .tar.gz).dmg
+          if [[ "${unbundled}" -ne 0 ]]; then
+            exit 1
           fi
-          cd ..
-          ls -l packages
-        else
-          true
-        fi
 
-    - name: Upload macOS arm64 Artifacts
-      uses: actions/upload-artifact@v7
-      with:
-        name: openhantek_${{ steps.config_git.outputs.git_describe }}_macos_arm64
-        path: ${{github.workspace}}/build/packages/*
+      - name: Create DMG
+        shell: bash
+        run: |
+          set -euo pipefail
 
-    - name: Upload macOS arm64 Release Assets
-      if: startsWith(github.ref, 'refs/tags/')
-      uses: softprops/action-gh-release@v3
-      with:
-        prerelease: true
-        files: ./build/packages/*
-      env:
-        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          app_path="${GITHUB_WORKSPACE}/build/openhantek/OpenHantek.app"
+          version="${{ steps.metadata.outputs.version }}"
+          output_dir="${GITHUB_WORKSPACE}/dist"
+          dmg_path="${output_dir}/OpenHantek-${version}-macos-x86_64.dmg"
 
+          mkdir -p "${output_dir}"
+          create-dmg \
+            --volname "OpenHantek" \
+            --volicon "${GITHUB_WORKSPACE}/openhantek/res/images/OpenHantek.icns" \
+            --window-pos 200 120 \
+            --window-size 800 400 \
+            --icon-size 100 \
+            --icon "OpenHantek.app" 200 190 \
+            --hide-extension "OpenHantek.app" \
+            --app-drop-link 600 185 \
+            --eula "${GITHUB_WORKSPACE}/LICENSE" \
+            --skip-jenkins \
+            "${dmg_path}" \
+            "${app_path}"
 
-# --------------------------
-# --- Windows MSVC steps ---
-# --------------------------
-#
-  windows-msvc_x64:
-    runs-on: windows-2022
-    steps:
+          shasum -a 256 "${dmg_path}" > "${output_dir}/SHA256SUMS.txt"
+          ls -lh "${output_dir}"
 
-    # --- Clone the latest commit ---
-    - name: Checkout
-      uses: actions/checkout@v6
-      with:
-        fetch-tags: true
-        submodules: recursive
-        fetch-depth: 0
-
-    # --- Config git and get the version from "git describe" ---
-    - name: Config Git
-      id: config_git
-      shell: bash
-      run: |
-        git config user.email "Ho-Ro@users.noreply.github.com"
-        git config user.name "Ho-Ro"
-        git fetch --tags --force || true
-        echo "git_describe=$(git describe)"
-        echo "git_describe=$(git describe)" >> $GITHUB_OUTPUT
-
-    - name: Install Qt for Windows
-      uses: jurplel/install-qt-action@v4
-
-    - name: Setup Windows MSVC Build
-      run:
-        md build &
-        call "%VCINSTALLDIR%/Auxiliary/Build/vcvars64.bat" &
-        cmake -G "Visual Studio 17 2022" -A x64 -DCMAKE_PREFIX_PATH=%Qt6_DIR% -DCMAKE_BUILD_TYPE=Release -Bbuild
-
-    - name: Windows MSVC Build
-      # GitHub hosts Windows runners on Standard_DS2_v2 virtual machines in Microsoft Azure:
-      # 2-core CPU, 7 GB of RAM memory, 14 GB of SSD disk space
-      working-directory: ${{github.workspace}}/build
-      shell: bash
-      run: |
-        cmake --build . --parallel 8 --config Release --target package
-        ZIP=$(basename packages/openhantek_*_msvc_x64.zip)
-        rm -f packages/openhantek_*_msvc_x64.*
-        cd openhantek/Release
-        7z a ../../packages/$ZIP *
-        cd ../..
-        ls -l packages
-
-    - name: Upload Windows MSVC Artifacts
-      uses: actions/upload-artifact@v7
-      with:
-        name: openhantek_${{ steps.config_git.outputs.git_describe }}_msvc_x64
-        path: ./build/packages/*.zip
-
-    - name: Upload Windows MSVC Release Assets
-      if: startsWith(github.ref, 'refs/tags/')
-      uses: softprops/action-gh-release@v3
-      with:
-        prerelease: true
-        files: ./build/packages/*
-      env:
-        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-
-
-############################################
-# The MINGW build is currently not working #
-############################################
-
-# # ---------------------------
-# # --- Windows MINGW steps ---
-# # ---------------------------
-# #
-#   windows-mingw_w64:
-#     runs-on: windows-2022
-#     steps:
-
-#     # --- Clone the latest commit ---
-#     - name: Checkout
-#       uses: actions/checkout@v6
-#       with:
-#         fetch-tags: true
-#         submodules: recursive
-#         fetch-depth: 0
-
-#     # --- Config git and get the version from "git describe" ---
-#     - name: Config Git
-#       id: config_git
-#       shell: bash
-#       run: |
-#         git config user.email "Ho-Ro@users.noreply.github.com"
-#         git config user.name "Ho-Ro"
-#         git fetch --tags --force || true
-#         echo "git_describe=$(git describe)"
-#         echo "git_describe=$(git describe)" >> $GITHUB_OUTPUT
-
-#     - name: Install MSYS2 Packages
-#       uses: msys2/setup-msys2@v2
-#       with:
-#         update: true
-#         install: >-
-#           mingw-w64-x86_64-cmake
-#           mingw-w64-x86_64-gcc
-#           mingw-w64-x86_64-qt6-static
-#           mingw-w64-x86_64-fftw
-#           mingw-w64-x86_64-libusb
-
-#     - name: Start Windows Build
-#       shell: msys2 {0}
-#       run: |
-#         cmake -D CMAKE_PREFIX_PATH=/mingw64/qt6-static -D CMAKE_BUILD_TYPE=$BUILD_TYPE -B build
-#         cmake --build build --parallel 8 --target package
-
-#     - name: Create Windows Package
-#       # GitHub hosts Windows runners on Standard_DS2_v2 virtual machines in Microsoft Azure:
-#       # 2-core CPU, 7 GB of RAM memory, 14 GB of SSD disk space
-#       working-directory: ${{github.workspace}}/build
-#       shell: bash
-#       run: |
-#         # this ZIP package contains only OpenHantek.exe, just get the name
-#         ZIP=$(basename packages/openhantek_*_mingw_amd64.zip)
-#         rm -f packages/openhantek_*_mingw_amd64.*
-#         cd openhantek
-#         7z a ../packages/$ZIP *.exe driver documents
-#         ls -l ../packages
-
-#     - name: Upload Windows Artifacts
-#       uses: actions/upload-artifact@v7
-#       with:
-#         name: openhantek_${{ steps.config_git.outputs.git_describe }}_mingw_amd64
-#         path: ./build/packages/*.zip
-
-#     - name: Upload Windows Release Assets
-#       if: startsWith(github.ref, 'refs/tags/')
-#       uses: softprops/action-gh-release@v3
-#       with:
-#         prerelease: true
-#         files: ./build/packages/*
-#       env:
-#         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-
+      - name: Upload Intel DMG
+        uses: actions/upload-artifact@v7
+        with:
+          name: OpenHantek-${{ steps.metadata.outputs.version }}-macos-x86_64
+          path: |
+            dist/*.dmg
+            dist/SHA256SUMS.txt
+          if-no-files-found: error
+          retention-days: 30
