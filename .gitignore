@@ -22,3 +22,7 @@ ui_*.h
 # Local device data; never publish calibration captures or backups.
 /calibration-backups/
 /diagnostic-logs/
+
+# Local project notes; keep private.
+/OpenHantek6022 Folder info.rtf
+/~$enHantek6022 Folder info.rtf
