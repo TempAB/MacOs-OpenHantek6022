@@ -44,7 +44,6 @@ project information below is inherited from upstream; fork-specific behavior is 
 * [Other DSO Open Source Software](#other-dso-open-source-software)
 * [Other Related Software](#other-related-software)
 * [History](#history)
-* [Donate](#please-help-the-victims-of-the-war)
 <!-- * [Donate for FSF](#donate-for-fsf) -->
 
 ## About This Modification
@@ -400,10 +399,3 @@ but David [stopped maintaining](https://github.com/OpenHantek/openhantek/issues/
 If you really enjoy this project and would like to donate, please give it to the [Free Software Foundation](https://www.fsf.org/).
 Without the FSF, we wouldn't have this [free software](https://www.gnu.org/philosophy/free-sw.html) that we can use today.
 -->
-
-# Please Help the Victims of the War!
-**Openhantek6022** is a project where people from all over the world collaborate peacefully, regardless of where they live.
-If you are lucky enough to live in peace, please [**donate**](https://www.icrc.org/en/donate/ukraine) 
-to the *International Committee of the Red Cross*.
-
-![blue-yellow](docs/images/blue-yellow.png)
