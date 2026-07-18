@@ -379,7 +379,7 @@ MainWindow::MainWindow( HantekDsoControl *dsoControl, DsoSettings *settings, Exp
         } );
 
         connect( dsoControl, &HantekDsoControl::offsetRepeatabilityStudyStateChanged, this,
-                 [ this, dsoControl, scope ]( bool active ) {
+                 [ this, dsoControl, scope, horizontalDock ]( bool active ) {
                      scope->liveCalibrationActive = active;
                      QSignalBlocker blocker( ui->actionOffsetRepeatabilityStudy );
                      ui->actionOffsetRepeatabilityStudy->setChecked( active );
