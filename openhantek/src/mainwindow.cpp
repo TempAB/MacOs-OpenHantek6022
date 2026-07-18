@@ -123,6 +123,9 @@ MainWindow::MainWindow( HantekDsoControl *dsoControl, DsoSettings *settings, Exp
         tr( "Prepare a verified backup and optionally perform a guarded EEPROM calibration update" ) );
     ui->actionCalibrateOffset->setIcon( QIcon( iconPath + "offset.svg" ) );
     ui->actionCalibrateOffset->setToolTip( tr( "Short-circuit both inputs and slowly select all voltage gain settings" ) );
+    ui->actionOffsetRepeatabilityStudy->setIcon( QIcon( iconPath + "offset.svg" ) );
+    ui->actionOffsetRepeatabilityStudy->setToolTip(
+        tr( "Collect eight read-only offset measurement runs for repeatability analysis" ) );
     ui->actionManualCommand->setIcon( QIcon( iconPath + "terminal.svg" ) );
     ui->actionManualCommand->setToolTip( tr( "Send low level commands directly to the scope: 'CC XX XX'" ) );
     ui->actionUserManual->setIcon( QIcon( iconPath + "book.svg" ) );
@@ -232,8 +235,13 @@ MainWindow::MainWindow( HantekDsoControl *dsoControl, DsoSettings *settings, Exp
     setCentralWidget( dsoWidget );
 
     deviceCommandWidgets = { voltageDock, horizontalDock, triggerDock, spectrumDock, dsoWidget };
-    deviceCommandActions = { ui->actionOpen, ui->actionSampling, ui->actionRefresh, ui->actionCalibrateOffset,
-                             ui->actionPrepareEEPROMCalibrationDryRun, ui->actionManualCommand };
+    deviceCommandActions = { ui->actionOpen,
+                             ui->actionSampling,
+                             ui->actionRefresh,
+                             ui->actionCalibrateOffset,
+                             ui->actionOffsetRepeatabilityStudy,
+                             ui->actionPrepareEEPROMCalibrationDryRun,
+                             ui->actionManualCommand };
 
     if ( dsoControl->getDevice()->isRealHW() ) { // enable online calibration and manual command input
         // Command field inside the status bar
@@ -253,6 +261,7 @@ MainWindow::MainWindow( HantekDsoControl *dsoControl, DsoSettings *settings, Exp
         } );
 
         ui->actionPrepareEEPROMCalibrationDryRun->setVisible( spec->hasCalibrationEEPROM );
+        ui->actionOffsetRepeatabilityStudy->setVisible( spec->hasCalibrationEEPROM );
         if ( spec->hasCalibrationEEPROM ) {
             connect( ui->actionPrepareEEPROMCalibrationDryRun, &QAction::triggered, this, [ this, dsoControl ]() {
                 QMessageBox choice( QMessageBox::Information, tr( "EEPROM Calibration Safety" ),
@@ -342,6 +351,93 @@ MainWindow::MainWindow( HantekDsoControl *dsoControl, DsoSettings *settings, Exp
                      } );
         }
 
+        connect( ui->actionOffsetRepeatabilityStudy, &QAction::toggled, this, [ this, dsoControl ]( bool active ) {
+            if ( active ) {
+                active =
+                    QMessageBox::Apply ==
+                    QMessageBox::information(
+                        this, tr( "Eight-Run Offset Repeatability Study" ),
+                        tr( "This diagnostic study will not write the EEPROM or active calibration INI. It will create "
+                            "a timestamped data bundle under the calibration folder.\n\n"
+                            "Before continuing:\n"
+                            "- Warm the oscilloscope for about 20 minutes.\n"
+                            "- Short both inputs in the same manner.\n"
+                            "- Enable both channels and select a 10 ms/div timebase.\n\n"
+                            "Complete eight passes through all voltage ranges. Use ascending order for odd runs and "
+                            "descending order for even runs. The status bar will show the current run." ),
+                        QMessageBox::Apply | QMessageBox::Abort, QMessageBox::Abort );
+                if ( !active ) {
+                    QSignalBlocker blocker( ui->actionOffsetRepeatabilityStudy );
+                    ui->actionOffsetRepeatabilityStudy->setChecked( false );
+                    return;
+                }
+                QMetaObject::invokeMethod( dsoControl, "startOffsetRepeatabilityStudy", Qt::QueuedConnection );
+                return;
+            }
+
+            QMetaObject::invokeMethod( dsoControl, "cancelOffsetRepeatabilityStudy", Qt::QueuedConnection );
+        } );
+
+        connect( dsoControl, &HantekDsoControl::offsetRepeatabilityStudyStateChanged, this,
+                 [ this, dsoControl, scope ]( bool active ) {
+                     scope->liveCalibrationActive = active;
+                     QSignalBlocker blocker( ui->actionOffsetRepeatabilityStudy );
+                     ui->actionOffsetRepeatabilityStudy->setChecked( active );
+                     const bool available = dsoControl->isDeviceAvailable();
+                     ui->actionCalibrateOffset->setEnabled( available && !active );
+                     ui->actionPrepareEEPROMCalibrationDryRun->setEnabled( available && !active );
+                     ui->actionOffsetRepeatabilityStudy->setEnabled( available );
+                     horizontalDock->setEnabled( available && !active );
+                 } );
+
+        connect( dsoControl, &HantekDsoControl::offsetRepeatabilityStudyRunCompleted, this,
+                 [ this, dsoControl ]( unsigned completedRun, unsigned nextRun, bool nextRunAscending ) {
+                     const QString startRange = nextRunAscending ? tr( "20 mV/div" ) : tr( "5000 mV/div" );
+                     QMessageBox pause(
+                         QMessageBox::Information, tr( "Offset Repeatability Run Complete" ),
+                         tr( "Run %1 is complete.\n\n"
+                             "Wait about one minute before continuing so the dataset includes short-term drift. "
+                             "Leave both inputs shorted and keep the oscilloscope powered.\n\n"
+                             "Run %2 uses %3 order. Leave both channels at %4, then click Continue when ready." )
+                             .arg( completedRun )
+                             .arg( nextRun )
+                             .arg( nextRunAscending ? tr( "ascending" ) : tr( "descending" ) )
+                             .arg( startRange ),
+                         QMessageBox::NoButton, this );
+                     QPushButton *continueButton =
+                         pause.addButton( tr( "Continue" ), QMessageBox::AcceptRole );
+                     pause.addButton( QMessageBox::Cancel );
+                     pause.setDefaultButton( continueButton );
+                     pause.exec();
+                     if ( pause.clickedButton() == continueButton ) {
+                         QMetaObject::invokeMethod( dsoControl, "continueOffsetRepeatabilityStudy",
+                                                   Qt::QueuedConnection );
+                     } else {
+                         ui->actionOffsetRepeatabilityStudy->setChecked( false );
+                     }
+                 } );
+
+        connect( dsoControl, &HantekDsoControl::offsetRepeatabilityStudyFinished, this,
+                 [ this ]( bool success, const QString &directoryPath, const QString &reportPath,
+                            const QString &message ) {
+                     const QMessageBox::Icon icon = success ? QMessageBox::Information : QMessageBox::Warning;
+                     const QString title =
+                         success ? tr( "Offset Repeatability Study Complete" )
+                                 : tr( "Offset Repeatability Study Incomplete" );
+                     const QString details =
+                         reportPath.isEmpty() ? message : message + tr( "\n\nStudy report:\n%1" ).arg( reportPath );
+                     QMessageBox result( icon, title, details, QMessageBox::NoButton, this );
+                     QPushButton *openFolder = nullptr;
+                     if ( !directoryPath.isEmpty() )
+                         openFolder = result.addButton( tr( "Open Folder" ), QMessageBox::ActionRole );
+                     result.addButton( QMessageBox::Close );
+                     result.exec();
+                     if ( openFolder && result.clickedButton() == openFolder &&
+                          !QDesktopServices::openUrl( QUrl::fromLocalFile( directoryPath ) ) )
+                         statusBar()->showMessage(
+                             tr( "Unable to open offset repeatability study folder: %1" ).arg( directoryPath ), 5000 );
+                 } );
+
         connect( ui->actionCalibrateOffset, &QAction::toggled, this, [ this, dsoControl, scope ]( bool active ) {
             if ( active ) {
                 active = ( QMessageBox::Apply ==
@@ -364,10 +460,12 @@ MainWindow::MainWindow( HantekDsoControl *dsoControl, DsoSettings *settings, Exp
             QMetaObject::invokeMethod( dsoControl, "calibrateOffset", Qt::QueuedConnection, Q_ARG( bool, active ) );
         } );
 
-        connect( dsoControl, &HantekDsoControl::offsetCalibrationStateChanged, this, [ this, scope ]( bool active ) {
+        connect( dsoControl, &HantekDsoControl::offsetCalibrationStateChanged, this,
+                 [ this, dsoControl, scope ]( bool active ) {
             scope->liveCalibrationActive = active;
             QSignalBlocker blocker( ui->actionCalibrateOffset );
             ui->actionCalibrateOffset->setChecked( active );
+            ui->actionOffsetRepeatabilityStudy->setEnabled( dsoControl->isDeviceAvailable() && !active );
         } );
 
         connect( ui->actionManualCommand, &QAction::toggled, this, [ this ]( bool checked ) {
@@ -387,6 +485,7 @@ MainWindow::MainWindow( HantekDsoControl *dsoControl, DsoSettings *settings, Exp
     } else { // do not show these actions
         ui->actionShowCalibrationFolder->setVisible( false );
         ui->actionPrepareEEPROMCalibrationDryRun->setVisible( false );
+        ui->actionOffsetRepeatabilityStudy->setVisible( false );
         ui->actionCalibrateOffset->setVisible( false );
         ui->actionManualCommand->setVisible( false );
     }
@@ -698,12 +797,14 @@ void MainWindow::deviceConnectionStateChanged( DeviceConnectionState state, cons
     if ( !available ) {
         QSignalBlocker samplingBlocker( ui->actionSampling );
         QSignalBlocker calibrationBlocker( ui->actionCalibrateOffset );
+        QSignalBlocker studyBlocker( ui->actionOffsetRepeatabilityStudy );
         QSignalBlocker manualCommandBlocker( ui->actionManualCommand );
         ui->actionSampling->setChecked( false );
         ui->actionSampling->setIcon( iconPlay );
         ui->actionSampling->setText( tr( "Start" ) );
         ui->actionSampling->setStatusTip( tr( "Oscilloscope unavailable" ) );
         ui->actionCalibrateOffset->setChecked( false );
+        ui->actionOffsetRepeatabilityStudy->setChecked( false );
         ui->actionManualCommand->setChecked( false );
         if ( commandEdit )
             commandEdit->hide();

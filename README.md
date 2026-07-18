@@ -193,6 +193,14 @@ On macOS, calibration files are stored in
 `~/.config/OpenHantek` is copied and verified automatically the first time the new location is used; the original is
 retained as a migration backup. Use *Oscilloscope/Show Calibration Folder* to reveal the active folder in Finder.
 
+*Oscilloscope/Offset Repeatability Study* collects eight diagnostic passes through all 16 channel/range combinations
+without changing the active calibration INI or writing the EEPROM. Keep both inputs shorted and use a fixed 10 ms/div
+timebase. The study prompts for ascending range order on odd runs, descending order on even runs, and a short pause
+between runs. It records accepted, discarded, clipped, and unstable frame measurements, verifies that the initial INI
+and EEPROM are unchanged, and creates CSV data, SHA-256 checksums, and a statistical report under
+`Calibration/Offset Repeatability Studies`. The suggested null half-width is provisional and must be reviewed before
+it is used to control an EEPROM update.
+
 *Oscilloscope/EEPROM Calibration Safety* always begins by reading the 80-byte calibration region twice and requiring
 both reads to match. It creates a timestamped folder under `Calibration/EEPROM Backups` containing the exact
 calibration-region backup, a snapshot of the active INI file, a proposed low-speed-offset image, SHA-256 checksums,

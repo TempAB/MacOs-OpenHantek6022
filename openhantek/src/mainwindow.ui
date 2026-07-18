@@ -57,6 +57,7 @@
     <addaction name="actionPrepareEEPROMCalibrationDryRun"/>
     <addaction name="separator"/>
     <addaction name="actionCalibrateOffset"/>
+    <addaction name="actionOffsetRepeatabilityStudy"/>
     <addaction name="separator"/>
     <addaction name="actionManualCommand"/>
    </widget>
@@ -227,6 +228,14 @@
    </property>
    <property name="text">
     <string>Calibrate &amp;Offset</string>
+   </property>
+  </action>
+  <action name="actionOffsetRepeatabilityStudy">
+   <property name="checkable">
+    <bool>true</bool>
+   </property>
+   <property name="text">
+    <string>Offset &amp;Repeatability Study ..</string>
    </property>
   </action>
   <action name="actionManualCommand">

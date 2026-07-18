@@ -13,6 +13,9 @@
 
 #include <QtCore>
 
+#include <algorithm>
+#include <cmath>
+
 #include "hantekdsocontrol.h"
 #include "mathchannel.h"
 #include "scopesettings.h"
@@ -124,6 +127,16 @@ static QString hexByte( uint8_t value ) {
 }
 
 
+static double median( std::vector< double > values ) {
+    if ( values.empty() )
+        return 0.0;
+
+    std::sort( values.begin(), values.end() );
+    const size_t middle = values.size() / 2;
+    return values.size() % 2 ? values[ middle ] : ( values[ middle - 1 ] + values[ middle ] ) / 2.0;
+}
+
+
 static bool validCalibrationByte( uint8_t value ) { return value != 0 && value != 0xFF; }
 
 
@@ -215,6 +228,7 @@ HantekDsoControl::~HantekDsoControl() {
 void HantekDsoControl::prepareForShutdown() {
     if ( verboseLevel > 1 )
         qDebug() << " HDC::prepareForShutdown()";
+    offsetRepeatabilityStudyActive = false;
     if ( offsetCalibrationActive ) {
         memcpy( offsetCorrection, offsetCalibrationOriginal, sizeof( offsetCorrection ) );
         offsetCalibrationActive = false;
@@ -610,6 +624,9 @@ void HantekDsoControl::applySettings( const DsoSettingsScope *dsoSettingsScope )
 void HantekDsoControl::parkForReconnect() {
     if ( verboseLevel > 1 )
         qDebug() << " HDC::parkForReconnect()";
+
+    if ( offsetRepeatabilityStudyActive )
+        finishOffsetRepeatabilityStudy( false, tr( "The study stopped because the oscilloscope disconnected." ) );
 
     {
         QWriteLocker locker( &scopeDeviceLock );
@@ -1543,6 +1560,8 @@ void HantekDsoControl::resetOffsetCalibration() {
     memset( offsetCalibrationFirst, 0, sizeof( offsetCalibrationFirst ) );
     memset( offsetCalibrationFrames, 0, sizeof( offsetCalibrationFrames ) );
     memset( offsetCalibrationComplete, 0, sizeof( offsetCalibrationComplete ) );
+    memset( offsetCalibrationUnstableRetries, 0, sizeof( offsetCalibrationUnstableRetries ) );
+    memset( offsetCalibrationClippedRejections, 0, sizeof( offsetCalibrationClippedRejections ) );
     for ( unsigned channel = 0; channel < HANTEK_CHANNEL_NUMBER; ++channel )
         offsetCalibrationLastGain[ channel ] = HANTEK_GAIN_STEPS;
 }
@@ -1563,6 +1582,12 @@ void HantekDsoControl::processOffsetCalibrationFrame( ChannelID channel, unsigne
         return;
 
     if ( offsetCalibrationLastGain[ channel ] != gainIndex ) {
+        if ( offsetRepeatabilityStudyActive ) {
+            offsetRepeatabilityFrameEvents.push_back(
+                { offsetRepeatabilityStudyRun, gainIndex, channel,
+                  QDateTime::currentDateTimeUtc().toString( Qt::ISODateWithMs ), liveOffset,
+                  std::numeric_limits< double >::quiet_NaN(), result.samplerate, "discarded-after-range-change" } );
+        }
         offsetCalibrationLastGain[ channel ] = gainIndex;
         offsetCalibrationSum[ gainIndex ][ channel ] = 0.0;
         offsetCalibrationFrames[ gainIndex ][ channel ] = 0;
@@ -1574,6 +1599,17 @@ void HantekDsoControl::processOffsetCalibrationFrame( ChannelID channel, unsigne
     constexpr double maximumOffset = 25.0;
     constexpr double maximumFrameDifference = 1.0;
     if ( clipped || qAbs( liveOffset ) > maximumOffset ) {
+        if ( offsetRepeatabilityStudyActive ) {
+            const QString decision = clipped ? "rejected-clipped" : "rejected-out-of-range";
+            offsetRepeatabilityFrameEvents.push_back(
+                { offsetRepeatabilityStudyRun, gainIndex, channel,
+                  QDateTime::currentDateTimeUtc().toString( Qt::ISODateWithMs ), liveOffset,
+                  std::numeric_limits< double >::quiet_NaN(), result.samplerate, decision } );
+            if ( clipped )
+                ++offsetCalibrationClippedRejections[ gainIndex ][ channel ];
+            else
+                ++offsetCalibrationUnstableRetries[ gainIndex ][ channel ];
+        }
         offsetCalibrationSum[ gainIndex ][ channel ] = 0.0;
         offsetCalibrationFrames[ gainIndex ][ channel ] = 0;
         emit statusMessage( tr( "Offset calibration is waiting for a stable, grounded signal on CH%1." ).arg( channel + 1 ),
@@ -1582,13 +1618,27 @@ void HantekDsoControl::processOffsetCalibrationFrame( ChannelID channel, unsigne
     }
 
     if ( !offsetCalibrationFrames[ gainIndex ][ channel ] ) {
+        if ( offsetRepeatabilityStudyActive ) {
+            offsetRepeatabilityFrameEvents.push_back(
+                { offsetRepeatabilityStudyRun, gainIndex, channel,
+                  QDateTime::currentDateTimeUtc().toString( Qt::ISODateWithMs ), liveOffset,
+                  std::numeric_limits< double >::quiet_NaN(), result.samplerate, "accepted-first" } );
+        }
         offsetCalibrationFirst[ gainIndex ][ channel ] = liveOffset;
         offsetCalibrationSum[ gainIndex ][ channel ] = liveOffset;
         offsetCalibrationFrames[ gainIndex ][ channel ] = 1;
         return;
     }
 
-    if ( qAbs( liveOffset - offsetCalibrationFirst[ gainIndex ][ channel ] ) > maximumFrameDifference ) {
+    const double frameDifference = liveOffset - offsetCalibrationFirst[ gainIndex ][ channel ];
+    if ( qAbs( frameDifference ) > maximumFrameDifference ) {
+        if ( offsetRepeatabilityStudyActive ) {
+            offsetRepeatabilityFrameEvents.push_back(
+                { offsetRepeatabilityStudyRun, gainIndex, channel,
+                  QDateTime::currentDateTimeUtc().toString( Qt::ISODateWithMs ), liveOffset, frameDifference,
+                  result.samplerate, "unstable-reset-new-first" } );
+            ++offsetCalibrationUnstableRetries[ gainIndex ][ channel ];
+        }
         offsetCalibrationFirst[ gainIndex ][ channel ] = liveOffset;
         offsetCalibrationSum[ gainIndex ][ channel ] = liveOffset;
         offsetCalibrationFrames[ gainIndex ][ channel ] = 1;
@@ -1603,13 +1653,30 @@ void HantekDsoControl::processOffsetCalibrationFrame( ChannelID channel, unsigne
     if ( offsetCalibrationFrames[ gainIndex ][ channel ] < stableFramesNeeded )
         return;
 
-    offsetCorrection[ gainIndex ][ channel ] =
-        offsetCalibrationSum[ gainIndex ][ channel ] / offsetCalibrationFrames[ gainIndex ][ channel ];
+    const double measuredOffset = offsetCalibrationSum[ gainIndex ][ channel ] / offsetCalibrationFrames[ gainIndex ][ channel ];
+    if ( offsetRepeatabilityStudyActive ) {
+        offsetRepeatabilityFrameEvents.push_back(
+            { offsetRepeatabilityStudyRun, gainIndex, channel,
+              QDateTime::currentDateTimeUtc().toString( Qt::ISODateWithMs ), liveOffset, frameDifference,
+              result.samplerate, "accepted-final" } );
+        offsetRepeatabilityResults.push_back(
+            { offsetRepeatabilityStudyRun, gainIndex, channel,
+              QDateTime::currentDateTimeUtc().toString( Qt::ISODateWithMs ),
+              offsetCalibrationFirst[ gainIndex ][ channel ], liveOffset, measuredOffset, result.samplerate,
+              offsetCalibrationUnstableRetries[ gainIndex ][ channel ],
+              offsetCalibrationClippedRejections[ gainIndex ][ channel ] } );
+    } else {
+        offsetCorrection[ gainIndex ][ channel ] = measuredOffset;
+    }
     offsetCalibrationComplete[ gainIndex ][ channel ] = true;
 
     const unsigned completed = completedOffsetCalibrationRanges();
     const unsigned total = HANTEK_GAIN_STEPS * HANTEK_CHANNEL_NUMBER;
     if ( completed == total ) {
+        if ( offsetRepeatabilityStudyActive ) {
+            completeOffsetRepeatabilityRun();
+            return;
+        }
         emit statusMessage( tr( "Offset calibration measured all %1 ranges. Turn off Calibrate Offset to save." ).arg( total ),
                             0 );
     } else {
@@ -1624,7 +1691,511 @@ void HantekDsoControl::processOffsetCalibrationFrame( ChannelID channel, unsigne
 }
 
 
+void HantekDsoControl::startOffsetRepeatabilityStudy() {
+    offsetRepeatabilityStudyDirectory.clear();
+    offsetRepeatabilityStudyTimestamp.clear();
+    QString message;
+    const auto fail = [ this, &message ]( const QString &reason ) {
+        message = tr( "Offset repeatability study could not start: %1 No calibration or EEPROM data was changed." )
+                      .arg( reason );
+        emit statusMessage( message, 0 );
+        emit offsetRepeatabilityStudyStateChanged( false );
+        emit offsetRepeatabilityStudyFinished( false, offsetRepeatabilityStudyDirectory, QString(), message );
+    };
+
+    if ( offsetCalibrationActive ) {
+        fail( tr( "finish or cancel the current calibration operation first." ) );
+        return;
+    }
+    if ( model->spec()->gain.size() != HANTEK_GAIN_STEPS ) {
+        fail( tr( "the oscilloscope does not use the expected eight-range calibration layout." ) );
+        return;
+    }
+    if ( controlsettings.voltage.size() < HANTEK_CHANNEL_NUMBER || !controlsettings.voltage[ 0 ].used ||
+         !controlsettings.voltage[ 1 ].used ) {
+        fail( tr( "both channels must be enabled." ) );
+        return;
+    }
+    if ( controlsettings.samplerate.current < 10e3 || controlsettings.samplerate.current > 100e3 ) {
+        fail( tr( "select a 10 to 100 kS/s sample rate, such as the 10 ms/div timebase." ) );
+        return;
+    }
+    if ( calibrationFileName.isEmpty() || !QFileInfo::exists( calibrationFileName ) ) {
+        fail( tr( "an active device-specific calibration INI file is required for the unchanged-file check." ) );
+        return;
+    }
+
+    QFile iniFile( calibrationFileName );
+    if ( !iniFile.open( QIODevice::ReadOnly ) ) {
+        fail( tr( "the active calibration INI could not be opened for its safety snapshot." ) );
+        return;
+    }
+    const QByteArray iniContents = iniFile.readAll();
+    if ( iniFile.error() != QFileDevice::NoError ) {
+        fail( tr( "the active calibration INI could not be read reliably." ) );
+        return;
+    }
+
+    QByteArray eepromBytes;
+    QByteArray eepromVerification;
+    QString deviceModel;
+    QString deviceSerial;
+    {
+        QWriteLocker locker( &scopeDeviceLock );
+        if ( !scopeDevice || deviceConnectionState != DeviceConnectionState::Connected || !scopeDevice->isConnected() ||
+             !scopeDevice->isRealHW() || !specification->hasCalibrationEEPROM ) {
+            fail( tr( "a connected physical oscilloscope with calibration EEPROM is required." ) );
+            return;
+        }
+
+        deviceModel = scopeDevice->getModel()->name;
+        deviceSerial = scopeDevice->getSerialNumber();
+        QString readError;
+        if ( !readCalibrationRegion( scopeDevice, eepromBytes, readError ) ||
+             !readCalibrationRegion( scopeDevice, eepromVerification, readError ) ) {
+            fail( tr( "two complete 80-byte EEPROM reads could not be obtained: %1." ).arg( readError ) );
+            return;
+        }
+    }
+    if ( eepromBytes != eepromVerification ) {
+        fail( tr( "two consecutive EEPROM reads did not match." ) );
+        return;
+    }
+
+    offsetRepeatabilityStudyTimestamp = QDateTime::currentDateTimeUtc().toString( "yyyyMMdd'T'HHmmsszzz'Z'" );
+    const QString deviceDirectory = QFileInfo( calibrationFileName ).completeBaseName();
+    offsetRepeatabilityStudyDirectory =
+        QDir( QFileInfo( calibrationFileName ).absolutePath() )
+            .filePath( "Offset Repeatability Studies/" + deviceDirectory + "/" + offsetRepeatabilityStudyTimestamp );
+    if ( !QDir().mkpath( offsetRepeatabilityStudyDirectory ) ) {
+        fail( tr( "the study output folder could not be created." ) );
+        return;
+    }
+
+    const QString iniSnapshotPath =
+        QDir( offsetRepeatabilityStudyDirectory ).filePath( "calibration-ini-before-study.ini" );
+    const QString eepromSnapshotPath =
+        QDir( offsetRepeatabilityStudyDirectory ).filePath( "eeprom-calibration-original-80-bytes.bin" );
+    if ( !writeFileAtomically( iniSnapshotPath, iniContents ) ||
+         !writeFileAtomically( eepromSnapshotPath, eepromBytes ) ) {
+        fail( tr( "the initial INI and EEPROM snapshots could not be saved and verified." ) );
+        return;
+    }
+
+    QString initialMetadata;
+    QTextStream metadata( &initialMetadata );
+    metadata << "OpenHantek6022 offset repeatability study\n"
+             << "============================================\n\n"
+             << "STATUS: COLLECTION IN PROGRESS; EEPROM AND ACTIVE INI NOT WRITTEN\n\n"
+             << "UTC timestamp: " << offsetRepeatabilityStudyTimestamp << "\n"
+             << "Device model: " << deviceModel << "\n"
+             << "Device serial: " << deviceSerial << "\n"
+             << "Application version: " << QCoreApplication::applicationVersion() << "\n"
+             << "Planned complete runs: " << OFFSET_REPEATABILITY_RUNS << "\n"
+             << "Combinations per run: " << HANTEK_GAIN_STEPS * HANTEK_CHANNEL_NUMBER << "\n"
+             << "Initial sample rate: " << QString::number( controlsettings.samplerate.current, 'f', 3 ) << " S/s\n"
+             << "Odd runs: ascending from 20 to 5000 mV/div\n"
+             << "Even runs: descending from 5000 to 20 mV/div\n";
+    if ( !writeFileAtomically( QDir( offsetRepeatabilityStudyDirectory ).filePath( "study-metadata.txt" ),
+                               initialMetadata.toUtf8() ) ) {
+        fail( tr( "the initial study metadata could not be saved and verified." ) );
+        return;
+    }
+
+    offsetRepeatabilityStudyDeviceModel = deviceModel;
+    offsetRepeatabilityStudyDeviceSerial = deviceSerial;
+    offsetRepeatabilityStudyIniContents = iniContents;
+    offsetRepeatabilityStudyEEPROMBytes = eepromBytes;
+    offsetRepeatabilityStudyRun = 0;
+    offsetRepeatabilityFrameEvents.clear();
+    offsetRepeatabilityResults.clear();
+    for ( unsigned run = 0; run < OFFSET_REPEATABILITY_RUNS; ++run ) {
+        offsetRepeatabilityRunStarted[ run ].clear();
+        offsetRepeatabilityRunCompleted[ run ].clear();
+    }
+    offsetRepeatabilityRunStarted[ 0 ] = QDateTime::currentDateTimeUtc().toString( Qt::ISODateWithMs );
+    memcpy( offsetCalibrationOriginal, offsetCorrection, sizeof( offsetCorrection ) );
+    resetOffsetCalibration();
+    offsetRepeatabilityStudyActive = true;
+    offsetCalibrationActive = true;
+
+    emit offsetRepeatabilityStudyStateChanged( true );
+    message =
+        tr( "Offset repeatability study run 1 of 8: select 20, 50, 100, 200, 500, 1000, 2000, then 5000 mV/div." );
+    emit statusMessage( message, 0 );
+}
+
+
+void HantekDsoControl::cancelOffsetRepeatabilityStudy() {
+    if ( !offsetRepeatabilityStudyActive )
+        return;
+
+    finishOffsetRepeatabilityStudy( false, tr( "The study was cancelled before all eight runs were complete." ) );
+}
+
+
+void HantekDsoControl::continueOffsetRepeatabilityStudy() {
+    if ( !offsetRepeatabilityStudyActive || offsetCalibrationActive ||
+         offsetRepeatabilityStudyRun + 1 >= OFFSET_REPEATABILITY_RUNS )
+        return;
+
+    ++offsetRepeatabilityStudyRun;
+    resetOffsetCalibration();
+    offsetRepeatabilityRunStarted[ offsetRepeatabilityStudyRun ] =
+        QDateTime::currentDateTimeUtc().toString( Qt::ISODateWithMs );
+    offsetCalibrationActive = true;
+
+    const bool ascending = offsetRepeatabilityStudyRun % 2 == 0;
+    const QString direction =
+        ascending
+            ? tr( "select 20, 50, 100, 200, 500, 1000, 2000, then 5000 mV/div." )
+            : tr( "select 5000, 2000, 1000, 500, 200, 100, 50, then 20 mV/div." );
+    emit statusMessage( tr( "Offset repeatability study run %1 of %2: %3" )
+                            .arg( offsetRepeatabilityStudyRun + 1 )
+                            .arg( OFFSET_REPEATABILITY_RUNS )
+                            .arg( direction ),
+                        0 );
+}
+
+
+void HantekDsoControl::completeOffsetRepeatabilityRun() {
+    if ( !offsetRepeatabilityStudyActive || offsetRepeatabilityStudyRun >= OFFSET_REPEATABILITY_RUNS )
+        return;
+
+    offsetRepeatabilityRunCompleted[ offsetRepeatabilityStudyRun ] =
+        QDateTime::currentDateTimeUtc().toString( Qt::ISODateWithMs );
+    if ( offsetRepeatabilityStudyRun + 1 >= OFFSET_REPEATABILITY_RUNS ) {
+        finishOffsetRepeatabilityStudy( true );
+        return;
+    }
+
+    offsetCalibrationActive = false;
+    const unsigned nextRun = offsetRepeatabilityStudyRun + 1;
+    emit statusMessage( tr( "Offset repeatability study run %1 complete. Pause before continuing with run %2." )
+                            .arg( offsetRepeatabilityStudyRun + 1 )
+                            .arg( nextRun + 1 ),
+                        0 );
+    emit offsetRepeatabilityStudyRunCompleted( offsetRepeatabilityStudyRun + 1, nextRun + 1,
+                                               nextRun % 2 == 0 );
+}
+
+
+void HantekDsoControl::finishOffsetRepeatabilityStudy( bool completed, const QString &reason ) {
+    offsetCalibrationActive = false;
+    offsetRepeatabilityStudyActive = false;
+    emit offsetRepeatabilityStudyStateChanged( false );
+
+    const unsigned expectedResults = OFFSET_REPEATABILITY_RUNS * HANTEK_GAIN_STEPS * HANTEK_CHANNEL_NUMBER;
+    const bool resultCountComplete = offsetRepeatabilityResults.size() == std::size_t( expectedResults );
+
+    QByteArray finalIniContents;
+    bool iniUnchanged = false;
+    QFile finalIni( calibrationFileName );
+    if ( finalIni.open( QIODevice::ReadOnly ) ) {
+        finalIniContents = finalIni.readAll();
+        iniUnchanged = finalIni.error() == QFileDevice::NoError &&
+                       finalIniContents == offsetRepeatabilityStudyIniContents;
+    }
+
+    QByteArray finalEEPROMBytes;
+    QByteArray finalEEPROMVerification;
+    bool eepromUnchanged = false;
+    {
+        QWriteLocker locker( &scopeDeviceLock );
+        if ( scopeDevice && deviceConnectionState == DeviceConnectionState::Connected && scopeDevice->isConnected() &&
+             scopeDevice->isRealHW() && specification->hasCalibrationEEPROM ) {
+            QString readError;
+            eepromUnchanged = readCalibrationRegion( scopeDevice, finalEEPROMBytes, readError ) &&
+                              readCalibrationRegion( scopeDevice, finalEEPROMVerification, readError ) &&
+                              finalEEPROMBytes == finalEEPROMVerification &&
+                              finalEEPROMBytes == offsetRepeatabilityStudyEEPROMBytes;
+        }
+    }
+
+    auto sortedResults = offsetRepeatabilityResults;
+    std::sort( sortedResults.begin(), sortedResults.end(), []( const OffsetRepeatabilityResult &left,
+                                                               const OffsetRepeatabilityResult &right ) {
+        if ( left.run != right.run )
+            return left.run < right.run;
+        if ( left.gainIndex != right.gainIndex )
+            return left.gainIndex < right.gainIndex;
+        return left.channel < right.channel;
+    } );
+
+    double minimumSamplerate = std::numeric_limits< double >::max();
+    double maximumSamplerate = 0.0;
+    for ( const OffsetRepeatabilityResult &record : sortedResults ) {
+        minimumSamplerate = qMin( minimumSamplerate, record.samplerate );
+        maximumSamplerate = qMax( maximumSamplerate, record.samplerate );
+    }
+    const bool samplerateConsistent =
+        resultCountComplete && minimumSamplerate >= 10e3 && maximumSamplerate <= 100e3 &&
+        maximumSamplerate - minimumSamplerate <= qMax( 1.0, maximumSamplerate * 0.001 );
+
+    QString frameCsvText;
+    QTextStream frameCsv( &frameCsvText );
+    frameCsv << "run,utc_timestamp,channel,range_mV_div,live_offset_adc_count,difference_from_first_adc_count,"
+                "sample_rate_S_per_s,decision\n";
+    for ( const OffsetRepeatabilityFrameEvent &event : offsetRepeatabilityFrameEvents ) {
+        const int rangeMillivolts = int( qRound( model->spec()->gain[ event.gainIndex ].Vdiv * 1000 ) );
+        frameCsv << event.run + 1 << "," << event.timestamp << ",CH" << event.channel + 1 << ","
+                 << rangeMillivolts << "," << QString::number( event.liveOffset, 'f', 9 ) << ","
+                 << ( qIsFinite( event.differenceFromFirst )
+                          ? QString::number( event.differenceFromFirst, 'f', 9 )
+                          : QString() )
+                 << "," << QString::number( event.samplerate, 'f', 3 ) << "," << event.decision << "\n";
+    }
+
+    QString runMeansCsvText;
+    QTextStream runMeansCsv( &runMeansCsvText );
+    runMeansCsv << "run,run_started_utc,run_completed_utc,measurement_completed_utc,range_order,channel,range_mV_div,"
+                   "first_frame_adc_count,second_frame_adc_count,mean_adc_count,absolute_frame_difference_adc_count,"
+                   "unstable_retry_count,clipped_rejection_count,sample_rate_S_per_s\n";
+    for ( const OffsetRepeatabilityResult &record : sortedResults ) {
+        const int rangeMillivolts = int( qRound( model->spec()->gain[ record.gainIndex ].Vdiv * 1000 ) );
+        runMeansCsv << record.run + 1 << "," << offsetRepeatabilityRunStarted[ record.run ] << ","
+                    << offsetRepeatabilityRunCompleted[ record.run ] << "," << record.timestamp << ","
+                    << ( record.run % 2 == 0 ? "ascending" : "descending" ) << ",CH" << record.channel + 1 << ","
+                    << rangeMillivolts << "," << QString::number( record.firstFrame, 'f', 9 ) << ","
+                    << QString::number( record.secondFrame, 'f', 9 ) << ","
+                    << QString::number( record.mean, 'f', 9 ) << ","
+                    << QString::number( qAbs( record.secondFrame - record.firstFrame ), 'f', 9 ) << ","
+                    << record.unstableRetries << "," << record.clippedRejections << ","
+                    << QString::number( record.samplerate, 'f', 3 ) << "\n";
+    }
+
+    QString analysisCsvText;
+    QTextStream analysisCsv( &analysisCsvText );
+    analysisCsv << "channel,range_mV_div,run_1_mean,run_2_mean,run_3_mean,run_4_mean,run_5_mean,run_6_mean,"
+                   "run_7_mean,run_8_mean,mean,median,sample_sd,mad,robust_sigma,within_run_mean_noise,"
+                   "effective_sigma,min,max,peak_to_peak,max_deviation_from_median,ci95_low,ci95_high,"
+                   "linear_drift_per_run,suggested_null_half_width,interpretation\n";
+
+    std::vector< double > suggestedWidths;
+    bool analysisComplete = resultCountComplete;
+    for ( unsigned channel = 0; analysisComplete && channel < HANTEK_CHANNEL_NUMBER; ++channel ) {
+        for ( unsigned gainIndex = 0; analysisComplete && gainIndex < HANTEK_GAIN_STEPS; ++gainIndex ) {
+            std::vector< double > means;
+            std::vector< double > frameDifferences;
+            for ( unsigned run = 0; run < OFFSET_REPEATABILITY_RUNS; ++run ) {
+                const auto match = std::find_if(
+                    sortedResults.begin(), sortedResults.end(),
+                    [ run, gainIndex, channel ]( const OffsetRepeatabilityResult &record ) {
+                        return record.run == run && record.gainIndex == gainIndex && record.channel == channel;
+                    } );
+                if ( match == sortedResults.end() ) {
+                    analysisComplete = false;
+                    break;
+                }
+                means.push_back( match->mean );
+                frameDifferences.push_back( match->secondFrame - match->firstFrame );
+            }
+            if ( !analysisComplete )
+                break;
+
+            double mean = 0.0;
+            for ( double value : means )
+                mean += value;
+            mean /= means.size();
+
+            double varianceSum = 0.0;
+            for ( double value : means )
+                varianceSum += ( value - mean ) * ( value - mean );
+            const double sampleStandardDeviation = std::sqrt( varianceSum / ( means.size() - 1 ) );
+            const double medianValue = median( means );
+
+            std::vector< double > absoluteDeviations;
+            double maximumDeviation = 0.0;
+            for ( double value : means ) {
+                const double deviation = qAbs( value - medianValue );
+                absoluteDeviations.push_back( deviation );
+                maximumDeviation = qMax( maximumDeviation, deviation );
+            }
+            const double medianAbsoluteDeviation = median( absoluteDeviations );
+            const double robustSigma = 1.4826 * medianAbsoluteDeviation;
+
+            double withinRunSquares = 0.0;
+            for ( double difference : frameDifferences )
+                withinRunSquares += difference * difference;
+            const double withinRunMeanNoise = std::sqrt( withinRunSquares / frameDifferences.size() ) / 2.0;
+            const double effectiveSigma = qMax( sampleStandardDeviation, qMax( robustSigma, withinRunMeanNoise ) );
+            const auto minMax = std::minmax_element( means.begin(), means.end() );
+            const double confidenceHalfWidth = 2.365 * sampleStandardDeviation / std::sqrt( double( means.size() ) );
+            const double confidenceLow = mean - confidenceHalfWidth;
+            const double confidenceHigh = mean + confidenceHalfWidth;
+
+            const double runCentre = ( OFFSET_REPEATABILITY_RUNS + 1 ) / 2.0;
+            double slopeNumerator = 0.0;
+            double slopeDenominator = 0.0;
+            for ( unsigned run = 0; run < OFFSET_REPEATABILITY_RUNS; ++run ) {
+                const double centredRun = double( run + 1 ) - runCentre;
+                slopeNumerator += centredRun * ( means[ run ] - mean );
+                slopeDenominator += centredRun * centredRun;
+            }
+            const double slope = slopeDenominator > 0.0 ? slopeNumerator / slopeDenominator : 0.0;
+            const double suggestedWidth =
+                std::ceil( 100.0 * qMax( 0.01, qMax( 3.5 * effectiveSigma, maximumDeviation + 0.01 ) ) ) / 100.0;
+            suggestedWidths.push_back( suggestedWidth );
+            const QString interpretation =
+                confidenceLow > 0.0 || confidenceHigh < 0.0 ? "repeatable-residual" : "consistent-with-zero";
+            const int rangeMillivolts = int( qRound( model->spec()->gain[ gainIndex ].Vdiv * 1000 ) );
+
+            analysisCsv << "CH" << channel + 1 << "," << rangeMillivolts;
+            for ( double value : means )
+                analysisCsv << "," << QString::number( value, 'f', 9 );
+            analysisCsv << "," << QString::number( mean, 'f', 9 ) << ","
+                        << QString::number( medianValue, 'f', 9 ) << ","
+                        << QString::number( sampleStandardDeviation, 'f', 9 ) << ","
+                        << QString::number( medianAbsoluteDeviation, 'f', 9 ) << ","
+                        << QString::number( robustSigma, 'f', 9 ) << ","
+                        << QString::number( withinRunMeanNoise, 'f', 9 ) << ","
+                        << QString::number( effectiveSigma, 'f', 9 ) << ","
+                        << QString::number( *minMax.first, 'f', 9 ) << ","
+                        << QString::number( *minMax.second, 'f', 9 ) << ","
+                        << QString::number( *minMax.second - *minMax.first, 'f', 9 ) << ","
+                        << QString::number( maximumDeviation, 'f', 9 ) << ","
+                        << QString::number( confidenceLow, 'f', 9 ) << ","
+                        << QString::number( confidenceHigh, 'f', 9 ) << ","
+                        << QString::number( slope, 'f', 9 ) << ","
+                        << QString::number( suggestedWidth, 'f', 2 ) << "," << interpretation << "\n";
+        }
+    }
+
+    double globalSuggestedWidth = 0.0;
+    double medianSuggestedWidth = 0.0;
+    if ( analysisComplete && !suggestedWidths.empty() ) {
+        globalSuggestedWidth = *std::max_element( suggestedWidths.begin(), suggestedWidths.end() );
+        medianSuggestedWidth = median( suggestedWidths );
+    }
+
+    const bool studyComplete = completed && resultCountComplete && analysisComplete;
+    QString metadataText;
+    QTextStream metadata( &metadataText );
+    metadata << "OpenHantek6022 offset repeatability study\n"
+             << "============================================\n\n"
+             << "STATUS: " << ( studyComplete ? "EIGHT RUNS COLLECTED" : "INCOMPLETE" ) << "\n"
+             << "EEPROM write commands issued: no\n"
+             << "Active INI write commands issued: no\n\n"
+             << "UTC timestamp: " << offsetRepeatabilityStudyTimestamp << "\n"
+             << "Device model: " << offsetRepeatabilityStudyDeviceModel << "\n"
+             << "Device serial: " << offsetRepeatabilityStudyDeviceSerial << "\n"
+             << "Application version: " << QCoreApplication::applicationVersion() << "\n"
+             << "Completed results: " << qulonglong( offsetRepeatabilityResults.size() ) << " of " << expectedResults
+             << "\n"
+             << "Frame events recorded: " << qulonglong( offsetRepeatabilityFrameEvents.size() ) << "\n"
+             << "Sample-rate consistency: " << ( samplerateConsistent ? "verified" : "NOT VERIFIED" ) << "\n";
+    for ( unsigned run = 0; run < OFFSET_REPEATABILITY_RUNS; ++run ) {
+        metadata << "Run " << run + 1 << " started: " << offsetRepeatabilityRunStarted[ run ]
+                 << "; completed: " << offsetRepeatabilityRunCompleted[ run ]
+                 << "; order: " << ( run % 2 == 0 ? "ascending" : "descending" ) << "\n";
+    }
+    if ( !reason.isEmpty() )
+        metadata << "Completion note: " << reason << "\n";
+
+    QString reportText;
+    QTextStream report( &reportText );
+    report << "OpenHantek6022 offset repeatability analysis\n"
+           << "================================================\n\n"
+           << "RESULT: " << ( studyComplete ? "EIGHT-RUN DATASET COMPLETE" : "STUDY INCOMPLETE" ) << "\n\n"
+           << "Device: " << offsetRepeatabilityStudyDeviceModel << " "
+           << offsetRepeatabilityStudyDeviceSerial << "\n"
+           << "Study timestamp: " << offsetRepeatabilityStudyTimestamp << "\n"
+           << "Completed range results: " << qulonglong( offsetRepeatabilityResults.size() ) << " of "
+           << expectedResults << "\n"
+           << "Active INI unchanged: " << ( iniUnchanged ? "verified" : "NOT VERIFIED" ) << "\n"
+           << "EEPROM unchanged after two matching final reads: "
+           << ( eepromUnchanged ? "verified" : "NOT VERIFIED" ) << "\n"
+           << "Sample rate remained within 10 to 100 kS/s and within 0.1% across results: "
+           << ( samplerateConsistent ? "verified" : "NOT VERIFIED" ) << "\n"
+           << "EEPROM write commands issued by this study: none\n"
+           << "Active INI write commands issued by this study: none\n\n";
+    if ( !sortedResults.empty() )
+        report << "Observed sample-rate range: " << QString::number( minimumSamplerate, 'f', 3 ) << " to "
+               << QString::number( maximumSamplerate, 'f', 3 ) << " S/s\n\n";
+    if ( !reason.isEmpty() )
+        report << "Completion note: " << reason << "\n\n";
+    report << "Per-range analysis:\n"
+           << "- Each run mean is the average of the two accepted stable frames.\n"
+           << "- Robust sigma is 1.4826 times the median absolute deviation.\n"
+           << "- Within-run mean noise is RMS(frame 2 - frame 1) divided by 2.\n"
+           << "- Effective sigma is the maximum of sample SD, robust sigma, and within-run mean noise.\n"
+           << "- Suggested half-width is rounded upward to 0.01 ADC count and is the maximum of\n"
+           << "  0.01, 3.5 times effective sigma, and maximum observed median deviation plus 0.01.\n"
+           << "- A 95% confidence interval excluding zero is labelled repeatable-residual.\n\n";
+    if ( analysisComplete ) {
+        report << "Provisional single global null half-width: "
+               << QString::number( globalSuggestedWidth, 'f', 2 ) << " ADC count\n";
+        if ( !samplerateConsistent )
+            report << "WARNING: Do not use this null-width result because the sample rate was not consistent.\n";
+        if ( medianSuggestedWidth > 0.0 && globalSuggestedWidth > 2.0 * medianSuggestedWidth )
+            report << "WARNING: One or more ranges dominate the global width by more than 2x the median.\n";
+        report << "This is a short-term starting value. Validate it across another day, temperature change,\n"
+               << "or USB power cycle before using it as a long-term EEPROM update threshold.\n\n";
+    } else {
+        report << "No null-width recommendation was calculated because all eight runs were not complete.\n\n";
+    }
+    report << "Detailed measurements: offset-calibration-run-means.csv\n"
+           << "Every accepted and rejected frame event: offset-calibration-frames.csv\n"
+           << "Per-range statistics: offset-repeatability-analysis.csv\n";
+
+    struct StudyArtifact {
+        QString fileName;
+        QByteArray contents;
+    };
+    std::vector< StudyArtifact > artifacts = {
+        { "study-metadata.txt", metadataText.toUtf8() },
+        { "calibration-ini-before-study.ini", offsetRepeatabilityStudyIniContents },
+        { "eeprom-calibration-original-80-bytes.bin", offsetRepeatabilityStudyEEPROMBytes },
+        { "offset-calibration-frames.csv", frameCsvText.toUtf8() },
+        { "offset-calibration-run-means.csv", runMeansCsvText.toUtf8() },
+        { "offset-repeatability-analysis.csv", analysisCsvText.toUtf8() },
+        { "offset-repeatability-report.txt", reportText.toUtf8() },
+    };
+    if ( !finalEEPROMBytes.isEmpty() )
+        artifacts.push_back( { "eeprom-calibration-final-80-bytes.bin", finalEEPROMBytes } );
+
+    bool artifactsWritten = true;
+    QByteArray checksums;
+    for ( const StudyArtifact &artifact : artifacts ) {
+        const QString path = QDir( offsetRepeatabilityStudyDirectory ).filePath( artifact.fileName );
+        if ( !writeFileAtomically( path, artifact.contents ) )
+            artifactsWritten = false;
+        checksums += sha256( artifact.contents ) + "  " + artifact.fileName.toUtf8() + "\n";
+    }
+    if ( !writeFileAtomically( QDir( offsetRepeatabilityStudyDirectory ).filePath( "SHA256SUMS.txt" ), checksums ) )
+        artifactsWritten = false;
+
+    const bool success = studyComplete && samplerateConsistent && iniUnchanged && eepromUnchanged && artifactsWritten;
+    const QString reportPath =
+        artifactsWritten ? QDir( offsetRepeatabilityStudyDirectory ).filePath( "offset-repeatability-report.txt" )
+                         : QString();
+    QString message;
+    if ( success ) {
+        message =
+            tr( "Eight-run offset repeatability study completed without changing EEPROM or the active INI. Bundle: %1" )
+                .arg( offsetRepeatabilityStudyDirectory );
+    } else if ( !artifactsWritten ) {
+        message = tr( "The offset repeatability study ended, but one or more study files could not be saved or verified. "
+                      "Partial folder: %1" )
+                      .arg( offsetRepeatabilityStudyDirectory );
+    } else {
+        message =
+            tr( "The offset repeatability study is incomplete or its unchanged-state checks did not pass. Review: %1" )
+                .arg( reportPath );
+    }
+
+    emit statusMessage( message, 0 );
+    emit offsetRepeatabilityStudyFinished( success, offsetRepeatabilityStudyDirectory, reportPath, message );
+}
+
+
 void HantekDsoControl::calibrateOffset( bool enable ) {
+    if ( offsetRepeatabilityStudyActive ) {
+        emit statusMessage( tr( "Finish or cancel the offset repeatability study before calibrating offset." ), 0 );
+        emit offsetCalibrationStateChanged( false );
+        return;
+    }
+
     if ( enable ) {
         if ( offsetCalibrationActive )
             return;

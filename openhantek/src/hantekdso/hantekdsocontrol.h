@@ -25,6 +25,7 @@
 
 #include <vector>
 
+#include <QByteArray>
 #include <QReadWriteLock>
 #include <QString>
 #include <QThread>
@@ -150,6 +151,60 @@ class HantekDsoControl : public QObject {
     void resetOffsetCalibration();
     void processOffsetCalibrationFrame( ChannelID channel, unsigned gainIndex, double liveOffset, bool clipped );
     unsigned completedOffsetCalibrationRanges() const;
+    void completeOffsetRepeatabilityRun();
+    void finishOffsetRepeatabilityStudy( bool completed, const QString &reason = QString() );
+
+    struct OffsetRepeatabilityFrameEvent {
+        OffsetRepeatabilityFrameEvent( unsigned runValue, unsigned gainIndexValue, unsigned channelValue,
+                                       const QString &timestampValue, double liveOffsetValue,
+                                       double differenceFromFirstValue, double samplerateValue,
+                                       const QString &decisionValue )
+            : run( runValue ),
+              gainIndex( gainIndexValue ),
+              channel( channelValue ),
+              timestamp( timestampValue ),
+              liveOffset( liveOffsetValue ),
+              differenceFromFirst( differenceFromFirstValue ),
+              samplerate( samplerateValue ),
+              decision( decisionValue ) {}
+
+        unsigned run;
+        unsigned gainIndex;
+        unsigned channel;
+        QString timestamp;
+        double liveOffset;
+        double differenceFromFirst;
+        double samplerate;
+        QString decision;
+    };
+
+    struct OffsetRepeatabilityResult {
+        OffsetRepeatabilityResult( unsigned runValue, unsigned gainIndexValue, unsigned channelValue,
+                                   const QString &timestampValue, double firstFrameValue, double secondFrameValue,
+                                   double meanValue, double samplerateValue, unsigned unstableRetriesValue,
+                                   unsigned clippedRejectionsValue )
+            : run( runValue ),
+              gainIndex( gainIndexValue ),
+              channel( channelValue ),
+              timestamp( timestampValue ),
+              firstFrame( firstFrameValue ),
+              secondFrame( secondFrameValue ),
+              mean( meanValue ),
+              samplerate( samplerateValue ),
+              unstableRetries( unstableRetriesValue ),
+              clippedRejections( clippedRejectionsValue ) {}
+
+        unsigned run;
+        unsigned gainIndex;
+        unsigned channel;
+        QString timestamp;
+        double firstFrame;
+        double secondFrame;
+        double mean;
+        double samplerate;
+        unsigned unstableRetries;
+        unsigned clippedRejections;
+    };
 
     /// Get the number of samples that are expected returned by the scope.
     /// In rolling mode this depends on the usb speed and packet size.
@@ -210,6 +265,21 @@ class HantekDsoControl : public QObject {
     unsigned offsetCalibrationFrames[ HANTEK_GAIN_STEPS ][ HANTEK_CHANNEL_NUMBER ] = {};
     bool offsetCalibrationComplete[ HANTEK_GAIN_STEPS ][ HANTEK_CHANNEL_NUMBER ] = {};
     unsigned offsetCalibrationLastGain[ HANTEK_CHANNEL_NUMBER ] = { HANTEK_GAIN_STEPS, HANTEK_GAIN_STEPS };
+    unsigned offsetCalibrationUnstableRetries[ HANTEK_GAIN_STEPS ][ HANTEK_CHANNEL_NUMBER ] = {};
+    unsigned offsetCalibrationClippedRejections[ HANTEK_GAIN_STEPS ][ HANTEK_CHANNEL_NUMBER ] = {};
+    static constexpr unsigned OFFSET_REPEATABILITY_RUNS = 8;
+    bool offsetRepeatabilityStudyActive = false;
+    unsigned offsetRepeatabilityStudyRun = 0;
+    QString offsetRepeatabilityStudyTimestamp;
+    QString offsetRepeatabilityStudyDirectory;
+    QString offsetRepeatabilityStudyDeviceModel;
+    QString offsetRepeatabilityStudyDeviceSerial;
+    QByteArray offsetRepeatabilityStudyIniContents;
+    QByteArray offsetRepeatabilityStudyEEPROMBytes;
+    QString offsetRepeatabilityRunStarted[ OFFSET_REPEATABILITY_RUNS ];
+    QString offsetRepeatabilityRunCompleted[ OFFSET_REPEATABILITY_RUNS ];
+    std::vector< OffsetRepeatabilityFrameEvent > offsetRepeatabilityFrameEvents;
+    std::vector< OffsetRepeatabilityResult > offsetRepeatabilityResults;
     bool capturing = false;
     bool samplingStarted = false;
     bool stateMachineRunning = false;
@@ -333,6 +403,11 @@ class HantekDsoControl : public QObject {
     /// \brief enable/disable offset calibration
     void calibrateOffset( bool enable );
 
+    /// Start or cancel a read-only eight-run offset repeatability study.
+    void startOffsetRepeatabilityStudy();
+    void continueOffsetRepeatabilityStudy();
+    void cancelOffsetRepeatabilityStudy();
+
     /// Create verified backup/candidate files without writing the device EEPROM.
     void prepareEEPROMCalibrationDryRun();
 
@@ -356,6 +431,13 @@ class HantekDsoControl : public QObject {
     void deviceAvailabilityChanged( bool available );
 
     void offsetCalibrationStateChanged( bool active ) const;
+
+    void offsetRepeatabilityStudyStateChanged( bool active ) const;
+
+    void offsetRepeatabilityStudyRunCompleted( unsigned completedRun, unsigned nextRun, bool nextRunAscending ) const;
+
+    void offsetRepeatabilityStudyFinished( bool success, const QString &directoryPath, const QString &reportPath,
+                                           const QString &message ) const;
 
     void eepromCalibrationDryRunFinished( bool success, const QString &directoryPath, const QString &reportPath,
                                           const QString &message ) const;
