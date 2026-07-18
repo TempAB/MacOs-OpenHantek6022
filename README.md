@@ -44,7 +44,6 @@ project information below is inherited from upstream; fork-specific behavior is 
 * [Other DSO Open Source Software](#other-dso-open-source-software)
 * [Other Related Software](#other-related-software)
 * [History](#history)
-<!-- * [Donate for FSF](#donate-for-fsf) -->
 
 ## About This Modification
 
@@ -393,9 +392,3 @@ We welcome any reported GitHub issue if you have a problem with this software. S
 The program was initially developed by [David Gräff and others](https://github.com/OpenHantek/openhantek/graphs/contributors)
 on [github.com/OpenHantek/openhantek](https://github.com/OpenHantek/openhantek),
 but David [stopped maintaining](https://github.com/OpenHantek/openhantek/issues/277) the programm in December 2018 and I took over. 
-
-<!--
-## Donate for FSF
-If you really enjoy this project and would like to donate, please give it to the [Free Software Foundation](https://www.fsf.org/).
-Without the FSF, we wouldn't have this [free software](https://www.gnu.org/philosophy/free-sw.html) that we can use today.
--->
