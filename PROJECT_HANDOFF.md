@@ -18,6 +18,8 @@ with the physical oscilloscope before they are merged into `main`.
 - `openhantek`: the original project
 - Final production implementation: `b52c0ea`
 - Final production branch: `codex/eeprom-calibration-final`
+- Calibration Help implementation: `3d2a2e0` and `35caf79`
+- Calibration Help branch: `codex/calibration-help`
 
 The final production branch was created directly from `origin/main`. It contains
 the hardware-validated null-window and identical-candidate safeguards without
@@ -142,9 +144,9 @@ general troubleshooting facilities. EEPROM safety reports, state markers,
 readbacks, and checksum manifests remain because they are transaction-safety
 records rather than temporary diagnostics.
 
-## In-Progress Calibration Help Integration
+## Completed and User-Tested Calibration Help Integration
 
-Branch `codex/calibration-help` adds an offline
+Branch `codex/calibration-help` added an offline
 `docs/OpenHantek6022_Calibration_and_EEPROM_Safety.html` guide. Its first
 section is a **How to Use — Quick Reference** that clearly separates:
 
@@ -167,16 +169,19 @@ The branch also:
 - falls back to the corresponding fork README section if the local guide
   cannot be opened.
 
-This help-only branch must pass the Intel GitHub Actions build and receive
-user interface review before it is merged into `main`.
-
 Intel workflow Run 28 passed for commit `3d2a2e0`. The user confirmed that the
 normal-calibration and EEPROM-dialog Help buttons open the correct guide
 sections without starting calibration or an EEPROM operation. Initial macOS
 review found that Qt automatically moved all three `About...` actions out of
 Help because they inherited `TextHeuristicRole`. The follow-up explicitly sets
 those three actions to `QAction::NoRole` so they remain in the requested Help
-menu; a replacement build and menu review are required before merge.
+menu.
+
+Intel workflow Run 29 passed for follow-up commit `35caf79`. The user installed
+build `OpenHantek-3.4.1-rc2-18-g35caf79-macos-x86_64` and confirmed that all
+three About actions are present and work correctly. The complete Help
+integration is therefore built and user-tested, and the user authorized its
+final merge and push to `main`.
 
 ## Current Device Calibration State
 
@@ -342,7 +347,9 @@ the previous `origin/main` at `6858ac6`. It intentionally excludes the
 temporary study interface and collection implementation while preserving only
 the final production null-window and identical-candidate safeguards. The
 hardware-tested final implementation, public attribution notice, and corrected
-fork build instructions have been fast-forwarded into `main`.
+fork build instructions have been fast-forwarded into `main`. The completed,
+user-tested calibration Help integration from `codex/calibration-help` has
+also been fast-forwarded into `main`.
 
 After relocating or freshly cloning the repository, start a new Codex local
 project at the new folder and ask it to read this file and the calibration
