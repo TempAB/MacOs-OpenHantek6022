@@ -24,9 +24,14 @@
 
 #include <QCheckBox>
 #include <QDesktopServices>
+#include <QDialog>
+#include <QDialogButtonBox>
 #include <QDir>
+#include <QDoubleSpinBox>
 #include <QFileDialog>
 #include <QFileInfo>
+#include <QFormLayout>
+#include <QLabel>
 #include <QLoggingCategory>
 #include <QMessageBox>
 #include <QPainter>
@@ -38,6 +43,7 @@
 #include <QTimer>
 #include <QUrl>
 #include <QValidator>
+#include <QVBoxLayout>
 
 #include "OH_VERSION.h"
 
@@ -264,21 +270,78 @@ MainWindow::MainWindow( HantekDsoControl *dsoControl, DsoSettings *settings, Exp
         ui->actionOffsetRepeatabilityStudy->setVisible( spec->hasCalibrationEEPROM );
         if ( spec->hasCalibrationEEPROM ) {
             connect( ui->actionPrepareEEPROMCalibrationDryRun, &QAction::triggered, this, [ this, dsoControl ]() {
-                QMessageBox choice( QMessageBox::Information, tr( "EEPROM Calibration Safety" ),
-                                    tr( "The application will first read the 80-byte calibration region twice and "
-                                        "create a verified backup, INI snapshot, candidate, checksums, and report.\n\n"
-                                        "Leave the advanced option unchecked for a read-only dry run." ),
-                                    QMessageBox::Apply | QMessageBox::Cancel, this );
+                QDialog choice( this );
+                choice.setWindowTitle( tr( "EEPROM Calibration Safety" ) );
+                choice.setMinimumWidth( 560 );
+
+                auto *layout = new QVBoxLayout( &choice );
+                auto *description =
+                    new QLabel( tr( "The application will first read the 80-byte calibration region twice and create "
+                                    "a verified backup, INI snapshot, candidate, checksums, and report.\n\n"
+                                    "The null half-width is centered on zero. Low-speed INI residuals at or inside "
+                                    "that window are treated as measurement noise and are not incorporated into the "
+                                    "EEPROM candidate.\n\n"
+                                    "Leave the advanced option unchecked for a read-only dry run." ),
+                                &choice );
+                description->setWordWrap( true );
+                layout->addWidget( description );
+
+                auto *nullWidth = new QDoubleSpinBox( &choice );
+                nullWidth->setDecimals( 2 );
+                nullWidth->setRange( HantekDsoControl::EEPROM_NULL_HALF_WIDTH_MIN,
+                                     HantekDsoControl::EEPROM_NULL_HALF_WIDTH_MAX );
+                nullWidth->setSingleStep( 0.01 );
+                nullWidth->setSuffix( tr( " ADC count" ) );
+                nullWidth->setValue( HantekDsoControl::EEPROM_NULL_HALF_WIDTH_DEFAULT );
+                auto *form = new QFormLayout();
+                form->addRow( tr( "Null half-width:" ), nullWidth );
+                layout->addLayout( form );
+
+                auto *nullWidthGuidance = new QLabel( &choice );
+                nullWidthGuidance->setWordWrap( true );
+                layout->addWidget( nullWidthGuidance );
+                const auto updateNullWidthGuidance = [ nullWidthGuidance ]( double value ) {
+                    if ( value == 0.0 ) {
+                        nullWidthGuidance->setText(
+                            tr( "Null filtering is disabled; every finite residual will be considered." ) );
+                    } else if ( value < HantekDsoControl::EEPROM_NULL_HALF_WIDTH_DEFAULT ) {
+                        nullWidthGuidance->setText(
+                            tr( "This is more sensitive than the 0.30 ADC-count value validated by the eight-run "
+                                "repeatability study." ) );
+                    } else if ( value > HantekDsoControl::EEPROM_NULL_HALF_WIDTH_DEFAULT ) {
+                        nullWidthGuidance->setText(
+                            tr( "This may suppress corrections larger than the study-backed 0.30 ADC-count noise "
+                                "window." ) );
+                    } else {
+                        nullWidthGuidance->setText(
+                            tr( "0.30 ADC count is the default supported by the completed eight-run repeatability "
+                                "study." ) );
+                    }
+                };
+                connect( nullWidth, static_cast< void ( QDoubleSpinBox::* )( double ) >(
+                                        &QDoubleSpinBox::valueChanged ),
+                         &choice, updateNullWidthGuidance );
+                updateNullWidthGuidance( nullWidth->value() );
+
                 auto *updateEEPROM =
                     new QCheckBox( tr( "Also back up and update the device EEPROM (advanced)" ), &choice );
                 updateEEPROM->setChecked( false );
-                choice.setCheckBox( updateEEPROM );
-                choice.setDefaultButton( QMessageBox::Cancel );
-                choice.button( QMessageBox::Apply )->setText( tr( "Continue" ) );
-                if ( choice.exec() != QMessageBox::Apply )
+                layout->addWidget( updateEEPROM );
+
+                auto *buttons =
+                    new QDialogButtonBox( QDialogButtonBox::Ok | QDialogButtonBox::Cancel, &choice );
+                buttons->button( QDialogButtonBox::Ok )->setText( tr( "Continue" ) );
+                buttons->button( QDialogButtonBox::Ok )->setAutoDefault( false );
+                buttons->button( QDialogButtonBox::Cancel )->setDefault( true );
+                connect( buttons, &QDialogButtonBox::accepted, &choice, &QDialog::accept );
+                connect( buttons, &QDialogButtonBox::rejected, &choice, &QDialog::reject );
+                layout->addWidget( buttons );
+
+                if ( choice.exec() != QDialog::Accepted )
                     return;
 
                 const bool writeRequested = updateEEPROM->isChecked();
+                const double nullHalfWidth = nullWidth->value();
                 if ( writeRequested ) {
                     const auto confirmation = QMessageBox::critical(
                         this, tr( "Confirm Physical EEPROM Update" ),
@@ -289,7 +352,10 @@ MainWindow::MainWindow( HantekDsoControl *dsoControl, DsoSettings *settings, Exp
                             "automatic rollback and another readback.\n\n"
                             "A power loss, unplugged cable, or hardware failure during the write could still require "
                             "manual recovery from the saved backup.\n\n"
-                            "Do you explicitly authorize this one EEPROM update?" ),
+                            "Selected null half-width: %1 ADC count.\n"
+                            "If the resulting candidate is byte-identical to the current EEPROM, no write will occur.\n\n"
+                            "Do you explicitly authorize this one EEPROM update?" )
+                            .arg( QString::number( nullHalfWidth, 'f', 2 ) ),
                         QMessageBox::Yes | QMessageBox::Cancel, QMessageBox::Cancel );
                     if ( confirmation != QMessageBox::Yes )
                         return;
@@ -298,7 +364,7 @@ MainWindow::MainWindow( HantekDsoControl *dsoControl, DsoSettings *settings, Exp
                 ui->actionPrepareEEPROMCalibrationDryRun->setEnabled( false );
                 QMetaObject::invokeMethod(
                     dsoControl, writeRequested ? "updateEEPROMCalibrationSafely" : "prepareEEPROMCalibrationDryRun",
-                    Qt::QueuedConnection );
+                    Qt::QueuedConnection, Q_ARG( double, nullHalfWidth ) );
             } );
 
             connect( dsoControl, &HantekDsoControl::eepromCalibrationDryRunFinished, this,
@@ -327,14 +393,16 @@ MainWindow::MainWindow( HantekDsoControl *dsoControl, DsoSettings *settings, Exp
                      } );
 
             connect( dsoControl, &HantekDsoControl::eepromCalibrationUpdateFinished, this,
-                     [ this, dsoControl ]( bool success, bool rollbackSucceeded, const QString &directoryPath,
-                                          const QString &reportPath, const QString &message ) {
+                     [ this, dsoControl ]( bool success, bool writePerformed, bool rollbackSucceeded,
+                                          const QString &directoryPath, const QString &reportPath,
+                                          const QString &message ) {
                          ui->actionPrepareEEPROMCalibrationDryRun->setEnabled( dsoControl->isDeviceAvailable() );
                          const QMessageBox::Icon icon =
                              success ? QMessageBox::Information
                                      : ( rollbackSucceeded ? QMessageBox::Warning : QMessageBox::Critical );
                          const QString title =
-                             success ? tr( "EEPROM Update Verified" )
+                             success ? ( writePerformed ? tr( "EEPROM Update Verified" )
+                                                        : tr( "EEPROM Update Not Needed" ) )
                                      : ( rollbackSucceeded ? tr( "EEPROM Update Stopped Safely" )
                                                            : tr( "EEPROM Recovery Required" ) );
                          const QString details =

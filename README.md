@@ -198,13 +198,19 @@ without changing the active calibration INI or writing the EEPROM. Keep both inp
 timebase. The study prompts for ascending range order on odd runs, descending order on even runs, and a short pause
 between runs. It records accepted, discarded, clipped, and unstable frame measurements, verifies that the initial INI
 and EEPROM are unchanged, and creates CSV data, SHA-256 checksums, and a statistical report under
-`Calibration/Offset Repeatability Studies`. The suggested null half-width is provisional and must be reviewed before
-it is used to control an EEPROM update.
+`Calibration/Offset Repeatability Studies`. The completed eight-run validation study established a default
+zero-centered null half-width of 0.30 ADC count for EEPROM candidate preparation.
 
 *Oscilloscope/EEPROM Calibration Safety* always begins by reading the 80-byte calibration region twice and requiring
 both reads to match. It creates a timestamped folder under `Calibration/EEPROM Backups` containing the exact
 calibration-region backup, a snapshot of the active INI file, a proposed low-speed-offset image, SHA-256 checksums,
 and a readable report.
+
+The safety dialog exposes the null half-width as an adjustable value from 0.00 through 0.50 ADC count in 0.01 steps.
+It starts at the study-backed 0.30 default every time the dialog opens and is not saved as a preference; 0.00 disables
+null filtering. For each of the 16 low-speed channel/range values, a residual at or inside the selected zero-centered
+window is treated as measurement noise and replaced with zero before the EEPROM candidate is calculated. The report
+records the selected width, raw and effective residuals, every apply/ignore decision, and the resulting byte pairs.
 
 The advanced EEPROM-update checkbox is unchecked by default and is never remembered. When it remains unchecked, the
 action is a read-only dry run and neither the EEPROM nor active INI is changed. Selecting it requires a second
@@ -212,7 +218,9 @@ explicit confirmation. The guarded update writes only four aligned 8-byte low-sp
 complete 80-byte readback, and automatically restores the original chunks if any write, readback, INI, or audit step
 fails. After a verified update, low-speed INI residuals are zeroed to prevent double correction; the previous
 residuals are retained separately under `[offset_high]` for high-speed sampling. The pre-update INI and EEPROM
-calibration region remain in the timestamped safety folder.
+calibration region remain in the timestamped safety folder. After residual filtering and EEPROM byte quantization,
+the complete candidate is compared with the current 80-byte calibration image. If they are identical, the result is
+reported as `NO MATERIAL CHANGE` and the physical EEPROM write is blocked even when the advanced option was selected.
 
 ### OpenGL Support
 OpenHantek6022 uses the *OpenGL* graphics library to display the data. It requires a graphics card that supports
