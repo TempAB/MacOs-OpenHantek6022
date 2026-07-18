@@ -1,0 +1,611 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>OpenHantek6022 Calibration and EEPROM Safety Guide</title>
+  <style>
+    :root {
+      color-scheme: light dark;
+      --background: #f3f6f8;
+      --surface: #ffffff;
+      --text: #17212b;
+      --muted: #506070;
+      --line: #cbd5df;
+      --accent: #146c94;
+      --accent-soft: #e7f4fa;
+      --safe: #236c3b;
+      --safe-soft: #e8f5ec;
+      --warning: #8a4b08;
+      --warning-soft: #fff2d9;
+      --danger: #a11d26;
+      --danger-soft: #fdebed;
+      --code: #edf1f4;
+    }
+
+    @media (prefers-color-scheme: dark) {
+      :root {
+        --background: #11161b;
+        --surface: #1b232b;
+        --text: #eef3f7;
+        --muted: #b7c2cc;
+        --line: #3b4955;
+        --accent: #6fc3ea;
+        --accent-soft: #173849;
+        --safe: #77cf91;
+        --safe-soft: #173723;
+        --warning: #f0ba67;
+        --warning-soft: #402d11;
+        --danger: #ff9299;
+        --danger-soft: #471d21;
+        --code: #27313a;
+      }
+    }
+
+    * {
+      box-sizing: border-box;
+    }
+
+    html {
+      scroll-behavior: smooth;
+    }
+
+    body {
+      margin: 0;
+      background: var(--background);
+      color: var(--text);
+      font: 16px/1.55 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    }
+
+    main {
+      width: min(980px, calc(100% - 32px));
+      margin: 24px auto 64px;
+      padding: clamp(24px, 4vw, 48px);
+      background: var(--surface);
+      border: 1px solid var(--line);
+      border-radius: 14px;
+      box-shadow: 0 12px 35px rgb(0 0 0 / 10%);
+    }
+
+    h1, h2, h3 {
+      line-height: 1.2;
+    }
+
+    h1 {
+      margin: 0 0 8px;
+      font-size: clamp(1.85rem, 4vw, 2.6rem);
+    }
+
+    h2 {
+      margin-top: 2.4rem;
+      padding-bottom: 0.35rem;
+      border-bottom: 2px solid var(--line);
+      font-size: 1.55rem;
+    }
+
+    h3 {
+      margin-top: 1.7rem;
+      font-size: 1.15rem;
+    }
+
+    a {
+      color: var(--accent);
+    }
+
+    code {
+      padding: 0.1em 0.3em;
+      background: var(--code);
+      border-radius: 4px;
+    }
+
+    .subtitle {
+      margin: 0 0 24px;
+      color: var(--muted);
+      font-size: 1.08rem;
+    }
+
+    .quick-reference {
+      margin: 0 0 28px;
+      padding: clamp(18px, 3vw, 28px);
+      background: var(--accent-soft);
+      border: 2px solid var(--accent);
+      border-radius: 12px;
+    }
+
+    .quick-reference h2 {
+      margin: 0 0 6px;
+      padding: 0;
+      border: 0;
+    }
+
+    .quick-reference h3 {
+      margin-top: 1.25rem;
+    }
+
+    .workflow-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+      gap: 16px;
+      margin-top: 14px;
+    }
+
+    .workflow {
+      padding: 16px 18px;
+      background: var(--surface);
+      border: 1px solid var(--line);
+      border-radius: 9px;
+    }
+
+    .workflow h3 {
+      margin: 0 0 8px;
+    }
+
+    ol, ul {
+      padding-left: 1.4rem;
+    }
+
+    li + li {
+      margin-top: 0.4rem;
+    }
+
+    .callout {
+      margin: 18px 0;
+      padding: 14px 18px;
+      border-left: 5px solid;
+      border-radius: 6px;
+    }
+
+    .safe {
+      background: var(--safe-soft);
+      border-color: var(--safe);
+    }
+
+    .warning {
+      background: var(--warning-soft);
+      border-color: var(--warning);
+    }
+
+    .danger {
+      background: var(--danger-soft);
+      border-color: var(--danger);
+    }
+
+    .callout strong:first-child {
+      color: inherit;
+    }
+
+    table {
+      width: 100%;
+      margin: 16px 0 24px;
+      border-collapse: collapse;
+    }
+
+    th, td {
+      padding: 10px 12px;
+      border: 1px solid var(--line);
+      text-align: left;
+      vertical-align: top;
+    }
+
+    th {
+      background: var(--accent-soft);
+    }
+
+    .muted {
+      color: var(--muted);
+    }
+
+    .contents {
+      columns: 2 260px;
+      padding: 14px 18px;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+    }
+
+    .contents li {
+      break-inside: avoid;
+    }
+
+    footer {
+      margin-top: 48px;
+      padding-top: 18px;
+      border-top: 1px solid var(--line);
+      color: var(--muted);
+      font-size: 0.92rem;
+    }
+
+    @media print {
+      :root {
+        color-scheme: light;
+      }
+
+      body {
+        background: white;
+        color: black;
+        font-size: 10.5pt;
+      }
+
+      main {
+        width: auto;
+        margin: 0;
+        padding: 0;
+        border: 0;
+        box-shadow: none;
+      }
+
+      .quick-reference {
+        break-after: page;
+      }
+
+      h2, h3, table, .callout {
+        break-inside: avoid;
+      }
+
+      a {
+        color: black;
+      }
+    }
+  </style>
+</head>
+<body>
+<main>
+  <h1>Calibration &amp; EEPROM Safety Guide</h1>
+  <p class="subtitle">
+    Quick operating reference and safety rules for the Intel macOS-focused OpenHantek6022 modification.
+  </p>
+
+  <section class="quick-reference" id="quick-reference">
+    <h2>How to Use — Quick Reference</h2>
+    <p>
+      Use the routine path for ordinary offset calibration. EEPROM preparation is a separate, advanced procedure and
+      is normally unnecessary.
+    </p>
+
+    <div class="workflow-grid">
+      <div class="workflow">
+        <h3>Routine offset calibration</h3>
+        <ol>
+          <li>Warm the oscilloscope under normal operating conditions, then short both analog inputs.</li>
+          <li>Enable CH1 and CH2. Select a slow timebase that produces a 10–100 kS/s sample rate.</li>
+          <li>Choose <strong>Oscilloscope → Calibrate Offset</strong>, then select <strong>Apply</strong>.</li>
+          <li>Slowly visit all eight voltage ranges on both channels. Wait for each completion report before moving on.</li>
+          <li>Turn calibration off only after all 16 channel/range combinations are reported complete.</li>
+          <li>The verified INI calibration becomes active immediately. The EEPROM was not changed.</li>
+        </ol>
+        <div class="callout safe">
+          <strong>Normal stopping point:</strong> Once the 16 measurements complete and the INI is saved, routine
+          calibration is finished.
+        </div>
+      </div>
+
+      <div class="workflow">
+        <h3>EEPROM decision path</h3>
+        <ol>
+          <li>Complete routine offset calibration first.</li>
+          <li>Choose <strong>Oscilloscope → EEPROM Calibration Safety</strong>.</li>
+          <li>Keep the null half-width at <strong>0.30 ADC count</strong> unless new evidence supports another value.</li>
+          <li>Leave the advanced EEPROM-update option <strong>unchecked</strong>, then run the read-only dry run.</li>
+          <li>Review the report, proposed candidate, exact backup, and checksums in the timestamped safety folder.</li>
+          <li>Stop if the result says <strong>NO MATERIAL CHANGE; EEPROM NOT WRITTEN</strong>.</li>
+        </ol>
+        <div class="callout danger">
+          <strong>Never select the advanced option merely to test it.</strong> It authorizes a physical EEPROM change
+          when the reviewed candidate differs materially.
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <nav aria-label="Guide contents">
+    <h2>Guide Contents</h2>
+    <ul class="contents">
+      <li><a href="#normal-offset-calibration">Normal offset calibration</a></li>
+      <li><a href="#calibration-files">Calibration files and rate behavior</a></li>
+      <li><a href="#eeprom-calibration-safety">EEPROM calibration safety</a></li>
+      <li><a href="#null-window">Null-window selection</a></li>
+      <li><a href="#physical-update">Rules for a physical update</a></li>
+      <li><a href="#results">Understanding the result</a></li>
+      <li><a href="#recovery">Recovery and retained evidence</a></li>
+      <li><a href="#manual-command">Manual Command</a></li>
+      <li><a href="#about-this-modification">About this modification</a></li>
+    </ul>
+  </nav>
+
+  <section id="normal-offset-calibration">
+    <h2>Normal Offset Calibration</h2>
+    <p>
+      The oscilloscope can have a noticeable zero-point error. Normal offset calibration measures the remaining error
+      and stores device-specific residual corrections in an INI file. It does not write the oscilloscope EEPROM.
+    </p>
+
+    <h3>Before starting</h3>
+    <ul>
+      <li>Allow the oscilloscope and Mac to reach representative operating conditions.</li>
+      <li>Short both inputs with 50 Ω terminating plugs or properly shorted probe inputs.</li>
+      <li>Enable both channels.</li>
+      <li>Select a 10–100 ms/div timebase, or otherwise verify that the displayed sample rate is 10–100 kS/s.</li>
+      <li>Disconnect test signals. The application must be measuring the shorted zero level.</li>
+    </ul>
+
+    <h3>Collecting all 16 results</h3>
+    <ol>
+      <li>Open <strong>Oscilloscope → Calibrate Offset</strong>.</li>
+      <li>Read the preparation prompt. Use its <strong>Help</strong> button to return to this section if needed.</li>
+      <li>Select <strong>Apply</strong>.</li>
+      <li>
+        Visit 20, 50, 100, 200, and 500 mV/div, then 1, 2, and 5 V/div on CH1 and CH2. A convenient approach is to
+        place both channels on one range, wait for both completions, then advance both channels to the next range.
+      </li>
+      <li>Wait for the status bar to report each range complete. Do not sweep quickly through the selectors.</li>
+      <li>Turn <strong>Calibrate Offset</strong> off only after all 16 channel/range combinations are complete.</li>
+    </ol>
+
+    <p>
+      The first frame after each range change is discarded. The application then requires two valid, stable
+      measurements. Clipped, out-of-range, and unstable frames are rejected and retried.
+    </p>
+
+    <div class="callout warning">
+      <strong>An incomplete run is intentionally discarded.</strong> Turning calibration off before all 16 results
+      complete cancels the run and leaves the active INI unchanged.
+    </div>
+
+    <p>
+      A completed calibration is saved and verified immediately. If an INI already exists, it is preserved as
+      <code>*.ini.bak</code>. If replacement or verification fails, the previous file is restored.
+    </p>
+  </section>
+
+  <section id="calibration-files">
+    <h2>Calibration Files and Sample-Rate Behavior</h2>
+    <p>On macOS, device-specific calibration files are stored under:</p>
+    <p><code>~/Library/Application Support/OpenHantek/OpenHantek6022/Calibration</code></p>
+    <p>
+      Choose <strong>Oscilloscope → Show Calibration Folder</strong> to reveal the active folder in Finder. When the
+      native location is first used, an existing file under <code>~/.config/OpenHantek</code> is copied and verified;
+      the legacy original is retained as a migration backup.
+    </p>
+
+    <table>
+      <thead>
+        <tr>
+          <th>Operating rate</th>
+          <th>Hardware values</th>
+          <th>INI residuals</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td>Below 30 MS/s</td>
+          <td>Low-speed EEPROM calibration</td>
+          <td><code>[offset]</code></td>
+        </tr>
+        <tr>
+          <td>30 MS/s and above</td>
+          <td>Protected high-speed EEPROM calibration</td>
+          <td><code>[offset_high]</code></td>
+        </tr>
+      </tbody>
+    </table>
+    <p>A normal low-speed calibration changes <code>[offset]</code> only.</p>
+  </section>
+
+  <section id="eeprom-calibration-safety">
+    <h2>EEPROM Calibration Safety</h2>
+    <p>
+      <strong>Oscilloscope → EEPROM Calibration Safety</strong> is an advanced, manual operation for evaluating
+      whether saved low-speed INI residuals should be incorporated into hardware calibration. It is not part of
+      routine offset calibration.
+    </p>
+
+    <div class="callout safe">
+      <strong>The default is read-only.</strong> Leave
+      <em>Also back up and update the device EEPROM (advanced)</em> unchecked. A dry run creates the complete evidence
+      bundle without sending an EEPROM write command.
+    </div>
+
+    <h3>What every dry run or update does first</h3>
+    <ol>
+      <li>Reads the complete 80-byte calibration region twice.</li>
+      <li>Requires the two reads to agree exactly.</li>
+      <li>Creates a timestamped folder under <code>Calibration/EEPROM Backups</code>.</li>
+      <li>Saves the exact EEPROM backup and an active INI snapshot.</li>
+      <li>Builds a proposed low-speed candidate after applying the selected null rule.</li>
+      <li>Writes a readable report and SHA-256 manifest for review.</li>
+    </ol>
+
+    <p>
+      The report records the raw and effective residual, null-window decision, calculated centre, and original and
+      proposed bytes for every channel and voltage range.
+    </p>
+  </section>
+
+  <section id="null-window">
+    <h2>Choosing the Null Window</h2>
+    <p>
+      The zero-centred null half-width controls only how a low-speed EEPROM candidate is prepared. It does not modify
+      the active INI, change normal calibration measurements, or alter protected high-speed EEPROM values.
+    </p>
+
+    <table>
+      <thead>
+        <tr>
+          <th>Selection</th>
+          <th>Candidate rule</th>
+          <th>Guidance</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td><code>0.00</code></td>
+          <td>Null filtering is disabled; every finite residual is retained.</td>
+          <td>Use only for deliberate analysis. It is more likely to retain measurement noise.</td>
+        </tr>
+        <tr>
+          <td><code>0.01–0.29</code></td>
+          <td rowspan="3">Ignore a residual when <code>abs(residual) &lt;= half-width</code>; retain it when outside.</td>
+          <td>More sensitive than the validated default and may propose unnecessary changes.</td>
+        </tr>
+        <tr>
+          <td><code>0.30</code></td>
+          <td>Recommended hardware-validated default for this fork; selected from eight runs and 128 results.</td>
+        </tr>
+        <tr>
+          <td><code>0.31–0.50</code></td>
+          <td>May suppress a real low-speed correction that the default would retain.</td>
+        </tr>
+      </tbody>
+    </table>
+
+    <p>
+      The repeatability dataset produced a statistical starting value of 0.29 ADC count. The production default was
+      rounded upward to 0.30. The selector resets to 0.30 each time the dialog opens and is never persisted.
+    </p>
+    <p>
+      Keep 0.30 for routine use. Change it only when new repeatability data from representative hardware,
+      temperature, and power-cycle conditions supports a different threshold. Validation on one unit is evidence for
+      this fork's default, not a guarantee that every compatible oscilloscope has identical noise behavior.
+    </p>
+
+    <div class="callout safe">
+      After filtering and EEPROM-byte quantization, the complete proposed 80-byte image is compared with the current
+      EEPROM. An identical image always produces <strong>NO MATERIAL CHANGE; EEPROM NOT WRITTEN</strong>, even if the
+      advanced option was selected.
+    </div>
+  </section>
+
+  <section id="physical-update">
+    <h2>Rules for a Physical EEPROM Update</h2>
+    <div class="callout danger">
+      <strong>A physical update is persistent hardware maintenance.</strong> Do not proceed merely because the option
+      exists. A recent, reviewed dry run must show a materially different candidate and justify the change.
+    </div>
+
+    <ol>
+      <li>Complete and save a normal offset calibration.</li>
+      <li>Run a fresh read-only dry run using the intended null half-width.</li>
+      <li>Review the report, candidate bytes, exact original backup, and SHA-256 manifest.</li>
+      <li>Stop if the candidate is identical or the evidence does not clearly justify a hardware change.</li>
+      <li>
+        Only for a reviewed, materially different candidate, reopen EEPROM Calibration Safety, reselect the null
+        half-width, explicitly check the advanced option, and accept the separate physical-write confirmation.
+      </li>
+      <li>Keep oscilloscope power, USB, and Mac power stable until the verified result is displayed.</li>
+      <li>Do not unplug the device, suspend the Mac, close the application, or disturb the USB link during the transaction.</li>
+      <li>Preserve the timestamped safety folder after the result.</li>
+    </ol>
+
+    <p>
+      An authorized transaction can write only four aligned 8-byte low-speed offset chunks at EEPROM addresses
+      <code>0x08</code>, <code>0x10</code>, <code>0x38</code>, and <code>0x40</code>. It then reads all 80 bytes and
+      requires an exact match with the candidate.
+    </p>
+    <p>
+      After a verified update, low-speed <code>[offset]</code> residuals are zeroed to prevent double correction.
+      Existing high-speed corrections remain under <code>[offset_high]</code>, and
+      <code>[eeprom] replace_eeprom=false</code> is verified.
+    </p>
+  </section>
+
+  <section id="results">
+    <h2>Understanding the Result</h2>
+    <table>
+      <thead>
+        <tr>
+          <th>Result</th>
+          <th>Meaning</th>
+          <th>Next action</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td>No material change</td>
+          <td>The proposed 80-byte image exactly matches the current EEPROM. No write occurred.</td>
+          <td>Stop. Continue using the verified INI and existing EEPROM.</td>
+        </tr>
+        <tr>
+          <td>Read-only candidate differs</td>
+          <td>The dry run found a proposed low-speed change. No write occurred.</td>
+          <td>Review every report field and checksum. Proceed only if the change is justified.</td>
+        </tr>
+        <tr>
+          <td>Update verified</td>
+          <td>The restricted chunks were written and the complete readback matched exactly.</td>
+          <td>Preserve the bundle and confirm normal operation after a controlled power cycle.</td>
+        </tr>
+        <tr>
+          <td>Update stopped safely</td>
+          <td>A problem was detected and the original chunks were restored and verified.</td>
+          <td>Preserve the bundle. Do not retry until its report has been reviewed.</td>
+        </tr>
+        <tr>
+          <td>Recovery required</td>
+          <td>The application could not verify a complete restoration after a failure.</td>
+          <td>Do not attempt another write. Preserve all files and obtain a detailed review before recovery work.</td>
+        </tr>
+      </tbody>
+    </table>
+  </section>
+
+  <section id="recovery">
+    <h2>Recovery and Retained Evidence</h2>
+    <p>
+      Any detected write, readback, INI, or audit failure triggers an attempt to restore the original low-speed
+      chunks, followed by another complete readback. The transaction folder is a safety record, not disposable debug
+      output.
+    </p>
+    <p>Retain, as applicable:</p>
+    <ul>
+      <li>the exact original EEPROM backup;</li>
+      <li>the proposed candidate and verified device readback;</li>
+      <li>the before-and-after INI snapshots;</li>
+      <li>the transaction report, state, and result records; and</li>
+      <li>the SHA-256 manifest.</li>
+    </ul>
+    <p>
+      Use <strong>Oscilloscope → Show Calibration Folder</strong> to find the calibration root. Each EEPROM operation
+      stores its evidence under the device-specific <code>EEPROM Backups</code> directory.
+    </p>
+  </section>
+
+  <section id="manual-command">
+    <h2>Manual Command Is Separate</h2>
+    <p>
+      <strong>Oscilloscope → Manual command</strong> is retained for intentional low-level troubleshooting. It is not
+      part of normal calibration, the EEPROM dry-run workflow, or routine recovery.
+    </p>
+    <div class="callout warning">
+      Do not use Manual Command to imitate EEPROM maintenance unless you understand the device protocol and have a
+      specific reviewed recovery plan. The guarded EEPROM workflow provides backups, restricted writes, readback,
+      rollback, and audit records that a raw command does not.
+    </div>
+  </section>
+
+  <section id="about-this-modification">
+    <h2>About This Intel macOS Modification</h2>
+    <p>
+      This application is an independently maintained, Intel <code>x86_64</code> macOS-focused modification of
+      OpenHantek6022. The fork adds Intel macOS packaging, selector refinements, verified persistent offset
+      calibration, native macOS calibration storage, and the read-only-first EEPROM safeguards described here.
+    </p>
+    <p>
+      Fork repository:
+      <a href="https://github.com/TempAB/MacOs-OpenHantek6022">TempAB/MacOs-OpenHantek6022</a>
+    </p>
+    <p>
+      The original cross-platform project, original user manual, license, and project history remain the foundation
+      of this work. Users seeking official upstream Linux, Windows, macOS, Apple Silicon, or broad device support
+      should use:
+      <a href="https://github.com/OpenHantek/OpenHantek6022">OpenHantek/OpenHantek6022</a>.
+    </p>
+  </section>
+
+  <footer>
+    <p>
+      This guide is bundled with the application for offline use. The repository README is the online fallback when
+      a local copy cannot be opened. Last revised July 2026.
+    </p>
+  </footer>
+</main>
+</body>
+</html>

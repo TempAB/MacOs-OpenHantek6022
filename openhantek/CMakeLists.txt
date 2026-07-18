@@ -60,11 +60,15 @@ if( APPLE AND BUILD_MACOSX_BUNDLE )
     set( MACOSX_BUNDLE_ICON_FILE openhantek.icns )
     set( ICONS ${CMAKE_CURRENT_SOURCE_DIR}/res/images/openhantek.icns )
     set_source_files_properties( ${ICONS} PROPERTIES MACOSX_PACKAGE_LOCATION "Resources" )
+    set( CALIBRATION_GUIDE
+        ${CMAKE_CURRENT_SOURCE_DIR}/../docs/OpenHantek6022_Calibration_and_EEPROM_Safety.html )
+    set_source_files_properties( ${CALIBRATION_GUIDE}
+        PROPERTIES MACOSX_PACKAGE_LOCATION "Resources/documents" )
 endif()
 
 # make executable
 add_executable(${PROJECT_NAME} ${EXECTYPE} ${SRC} ${HEADERS} ${UI}
-${QRC} ${RC} ${TRANSLATION_BIN_FILES} ${TRANSLATION_QRC} ${ICONS})
+${QRC} ${RC} ${TRANSLATION_BIN_FILES} ${TRANSLATION_QRC} ${ICONS} ${CALIBRATION_GUIDE})
 target_link_libraries(${PROJECT_NAME} Qt6::Widgets Qt6::PrintSupport Qt6::OpenGL Qt6::OpenGLWidgets ${OPENGL_LIBRARIES} )
 if( APPLE AND BUILD_MACOSX_BUNDLE )
     find_package(Qt6 REQUIRED COMPONENTS DBus)

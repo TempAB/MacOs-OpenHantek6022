@@ -65,6 +65,9 @@
      <string>&amp;Help</string>
     </property>
     <addaction name="actionUserManual"/>
+    <addaction name="actionCalibrationGuide"/>
+    <addaction name="actionAboutModification"/>
+    <addaction name="separator"/>
     <addaction name="actionACmodification"/>
     <addaction name="actionFrequencyGeneratorModification"/>
     <addaction name="separator"/>
@@ -193,7 +196,17 @@
   </action>
   <action name="actionUserManual">
    <property name="text">
-    <string>&amp;User Manual</string>
+    <string>&amp;User Manual (Original Project)</string>
+   </property>
+  </action>
+  <action name="actionCalibrationGuide">
+   <property name="text">
+    <string>&amp;Calibration &amp;&amp; EEPROM Safety Guide ..</string>
+   </property>
+  </action>
+  <action name="actionAboutModification">
+   <property name="text">
+    <string>About This Intel &amp;macOS Modification</string>
    </property>
   </action>
   <action name="actionAbout">

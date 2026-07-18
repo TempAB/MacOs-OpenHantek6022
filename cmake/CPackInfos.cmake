@@ -43,9 +43,9 @@ if (UNIX)
     endif()
 
     # install documentation
-    FILE(GLOB PDF "docs/*.pdf")
+    FILE(GLOB DOCUMENTATION "docs/*.pdf" "docs/OpenHantek6022_Calibration_and_EEPROM_Safety.html")
     install(
-        FILES CHANGELOG LICENSE README ${PDF}
+        FILES CHANGELOG LICENSE README ${DOCUMENTATION}
         DESTINATION share/doc/openhantek
     )
     # install application starter and icons

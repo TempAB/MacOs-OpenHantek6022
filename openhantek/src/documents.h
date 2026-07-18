@@ -6,6 +6,7 @@
 
 // manual and modification docs
 const QString UserManualName( "OpenHantek6022_User_Manual.pdf" );
+const QString CalibrationGuideName( "OpenHantek6022_Calibration_and_EEPROM_Safety.html" );
 const QString ACModificationName( "HANTEK6022_AC_Modification.pdf" );
 const QString FrequencyGeneratorModificationName( "HANTEK6022_Frequency_Generator_Modification.pdf" );
 
@@ -20,3 +21,7 @@ const QString DocPath( "/usr/share/doc/openhantek/" );
 
 // GitHub doc location
 const QString DocUrl( "https://github.com/OpenHantek/OpenHantek6022/blob/main/docs/" );
+const QString CalibrationGuideUrl(
+    "https://github.com/TempAB/MacOs-OpenHantek6022/blob/main/README.md#offset-calibration" );
+const QString ForkAboutUrl(
+    "https://github.com/TempAB/MacOs-OpenHantek6022/blob/main/README.md#about-this-modification" );

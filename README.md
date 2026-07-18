@@ -13,8 +13,9 @@
 
 This modification is maintained for a specific Intel `x86_64` Mac and has been hardware-tested with a Hantek
 DSO-6022BL. It adds a self-contained Intel macOS DMG workflow, consistent selector behavior, safer persistent offset
-calibration, native macOS calibration storage, and guarded EEPROM-calibration tools. The fork does not run upstream's
-Linux, Windows, Apple Silicon, or other device test matrix.
+calibration, native macOS calibration storage, guarded EEPROM-calibration tools, and a bundled
+[Calibration & EEPROM Safety Guide](docs/OpenHantek6022_Calibration_and_EEPROM_Safety.html). The fork does not run
+upstream's Linux, Windows, Apple Silicon, or other device test matrix.
 
 OpenHantek6022 is free software for **Hantek DSO6022** USB digital signal oscilloscopes. The underlying project
 supports Hantek 6022BE/BL and compatible scopes such as Voltcraft, Darkwire, Protek, and Acetech devices. Most general
@@ -34,6 +35,7 @@ project information below is inherited from upstream; fork-specific behavior is 
 * [Install Prebuilt Binary Packages](#install-prebuilt-binary-packages)
 * [Run OpenHantek6022](#run-openhantek6022)
   + [Offset Calibration](#offset-calibration)
+  + [In-app Calibration Help](#in-app-calibration-help)
   + [OpenGL Support](#opengl-support)
   + [USB Access](#usb-access)
 * [Important!](#important)
@@ -57,6 +59,8 @@ Intel macOS use. The principal differences are:
 * Native macOS calibration storage with verified migration from the legacy configuration location.
 * Read-only-first EEPROM preparation, exact backups, SHA-256 reports, guarded low-speed writes, complete readback,
   automatic rollback, an adjustable null window, and an unconditional no-write result for byte-identical candidates.
+* A bundled offline calibration and EEPROM safety guide with a first-page quick reference, Help buttons at both
+  calibration decision points, and clear attribution to the original project.
 
 These changes are documented in the [Offset Calibration](#offset-calibration) section. Users who need the original
 multi-platform project should use [OpenHantek/OpenHantek6022](https://github.com/OpenHantek/OpenHantek6022).
@@ -219,12 +223,25 @@ There is no point in supporting the LA input from OpenHantek.
 The oscilloscope has a relatively large zero-point error. Normal offset calibration measures the residual error and
 stores it in a device-specific INI file; it never writes the oscilloscope EEPROM.
 
+#### In-app calibration help
+
+Choose *Help/Calibration & EEPROM Safety Guide* for the bundled offline guide. Its opening **How to Use — Quick
+Reference** separates the normal six-step calibration workflow from the advanced EEPROM decision path. The same
+guide is available from the **Help** button in both the *Calibrate Offset* preparation prompt and the *EEPROM
+Calibration Safety* dialog.
+
+The Help menu labels the inherited PDF as *User Manual (Original Project)* and keeps the original AC and frequency
+generator modification documents. *About This Intel macOS Modification* opens the fork-attribution section of the
+offline guide. If the bundled guide cannot be found, the application opens the matching section of this README
+online.
+
 #### Required measurement procedure
 
 1. Short-circuit both inputs, for example with 50 Ω terminating plugs or shorted probe inputs.
 2. Enable both channels.
 3. Select a slow timebase of 10..100 ms/div so the sample rate is between 10 and 100 kS/s.
-4. Activate *Oscilloscope/Calibrate Offset* and accept the confirmation.
+4. Activate *Oscilloscope/Calibrate Offset*, use **Help** if the quick reference is needed, and accept the
+   confirmation.
 5. Slowly select all eight voltage ranges for CH1 and CH2. Wait for the status bar to report each range complete before
    moving to the next one.
 6. Deactivate *Calibrate Offset* only after all 16 channel/range combinations have been reported complete.
@@ -247,7 +264,8 @@ retained as a migration backup. Use *Oscilloscope/Show Calibration Folder* to re
 
 *Oscilloscope/EEPROM Calibration Safety* is an advanced, manual operation for incorporating saved low-speed INI
 residuals into hardware calibration. It is not part of normal offset calibration. The safe default is a read-only dry
-run: leave *Also back up and update the device EEPROM (advanced)* unchecked.
+run: leave *Also back up and update the device EEPROM (advanced)* unchecked. Select **Help** in this dialog to open
+the guide directly at the EEPROM safety section without accepting or changing the dialog.
 
 Every dry run or update reads the complete 80-byte calibration region twice and requires exact agreement. It then
 creates a timestamped folder under `Calibration/EEPROM Backups` containing the exact EEPROM backup, active INI

@@ -142,6 +142,34 @@ general troubleshooting facilities. EEPROM safety reports, state markers,
 readbacks, and checksum manifests remain because they are transaction-safety
 records rather than temporary diagnostics.
 
+## In-Progress Calibration Help Integration
+
+Branch `codex/calibration-help` adds an offline
+`docs/OpenHantek6022_Calibration_and_EEPROM_Safety.html` guide. Its first
+section is a **How to Use — Quick Reference** that clearly separates:
+
+- the routine 16-result offset-calibration workflow, which ends after the
+  verified INI is saved; and
+- the separate, read-only-first EEPROM decision path, including the `0.30`
+  null default and the no-material-change stopping rule.
+
+The branch also:
+
+- labels the inherited PDF as **User Manual (Original Project)**;
+- adds **Calibration & EEPROM Safety Guide** and
+  **About This Intel macOS Modification** to the Help menu;
+- adds a Help button to the normal offset-calibration prompt and EEPROM safety
+  dialog without changing or accepting their settings;
+- updates the About dialog while retaining original project, maintainer,
+  copyright, and firmware attribution;
+- packages the guide under the macOS app bundle's
+  `Contents/Resources/documents` directory; and
+- falls back to the corresponding fork README section if the local guide
+  cannot be opened.
+
+This help-only branch must pass the Intel GitHub Actions build and receive
+user interface review before it is merged into `main`.
+
 ## Current Device Calibration State
 
 - Model: `DSO-6022BL`

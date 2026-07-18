@@ -66,7 +66,8 @@ class MainWindow : public QMainWindow {
     screenshotType_t screenshotType;
     void screenShot( screenshotType_t screenshotType = SCREENSHOT, bool autoSave = false );
 
-    bool openDocument( QString docName );
+    bool openDocument( const QString &docName, const QString &fallbackUrl = QString(),
+                       const QString &fragment = QString() );
     void setDeviceCommandUiEnabled( bool enabled );
 
     QList< QWidget * > deviceCommandWidgets;

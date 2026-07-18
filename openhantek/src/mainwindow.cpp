@@ -40,6 +40,7 @@
 #include <QPrinter>
 #include <QPushButton>
 #include <QSignalBlocker>
+#include <QStringList>
 #include <QTimer>
 #include <QUrl>
 #include <QValidator>
@@ -132,7 +133,11 @@ MainWindow::MainWindow( HantekDsoControl *dsoControl, DsoSettings *settings, Exp
     ui->actionManualCommand->setIcon( QIcon( iconPath + "terminal.svg" ) );
     ui->actionManualCommand->setToolTip( tr( "Send low level commands directly to the scope: 'CC XX XX'" ) );
     ui->actionUserManual->setIcon( QIcon( iconPath + "book.svg" ) );
-    ui->actionUserManual->setToolTip( tr( "Read the fine manual" ) );
+    ui->actionUserManual->setToolTip( tr( "Read the original OpenHantek6022 user manual" ) );
+    ui->actionCalibrationGuide->setIcon( QIcon( iconPath + "book.svg" ) );
+    ui->actionCalibrationGuide->setToolTip( tr( "Safe calibration and EEPROM procedures" ) );
+    ui->actionAboutModification->setIcon( QIcon( iconPath + "about.svg" ) );
+    ui->actionAboutModification->setToolTip( tr( "About this Intel macOS-focused modification" ) );
     ui->actionACmodification->setIcon( QIcon( iconPath + "book.svg" ) );
     ui->actionACmodification->setToolTip( tr( "Documentation how to add HW for AC coupled inputs" ) );
     ui->actionFrequencyGeneratorModification->setIcon( QIcon( iconPath + "book.svg" ) );
@@ -317,13 +322,16 @@ MainWindow::MainWindow( HantekDsoControl *dsoControl, DsoSettings *settings, Exp
                 updateEEPROM->setChecked( false );
                 layout->addWidget( updateEEPROM );
 
-                auto *buttons =
-                    new QDialogButtonBox( QDialogButtonBox::Ok | QDialogButtonBox::Cancel, &choice );
+                auto *buttons = new QDialogButtonBox(
+                    QDialogButtonBox::Ok | QDialogButtonBox::Cancel | QDialogButtonBox::Help, &choice );
                 buttons->button( QDialogButtonBox::Ok )->setText( tr( "Continue" ) );
                 buttons->button( QDialogButtonBox::Ok )->setAutoDefault( false );
                 buttons->button( QDialogButtonBox::Cancel )->setDefault( true );
                 connect( buttons, &QDialogButtonBox::accepted, &choice, &QDialog::accept );
                 connect( buttons, &QDialogButtonBox::rejected, &choice, &QDialog::reject );
+                connect( buttons->button( QDialogButtonBox::Help ), &QPushButton::clicked, &choice, [ this ]() {
+                    openDocument( CalibrationGuideName, CalibrationGuideUrl, "eeprom-calibration-safety" );
+                } );
                 layout->addWidget( buttons );
 
                 if ( choice.exec() != QDialog::Accepted )
@@ -410,13 +418,23 @@ MainWindow::MainWindow( HantekDsoControl *dsoControl, DsoSettings *settings, Exp
 
         connect( ui->actionCalibrateOffset, &QAction::toggled, this, [ this, dsoControl, scope ]( bool active ) {
             if ( active ) {
-                active = ( QMessageBox::Apply ==
-                           QMessageBox::information( this, tr( "Calibrate Offset" ),
-                                                     tr( "Short-circuit both inputs, enable both channels, and select a 10 ms/div "
-                                                         "timebase.\n\n"
-                                                         "After clicking Apply, slowly select every voltage range on both channels. "
-                                                         "Turn off Calibrate Offset only after all 16 ranges are reported complete." ),
-                                                     QMessageBox::Apply | QMessageBox::Abort, QMessageBox::Abort ) );
+                QMessageBox prompt(
+                    QMessageBox::Information, tr( "Calibrate Offset" ),
+                    tr( "Short-circuit both inputs, enable both channels, and select a 10 ms/div timebase.\n\n"
+                        "After clicking Apply, slowly select every voltage range on both channels. "
+                        "Turn off Calibrate Offset only after all 16 ranges are reported complete." ),
+                    QMessageBox::Apply | QMessageBox::Abort | QMessageBox::Help, this );
+                prompt.setDefaultButton( QMessageBox::Abort );
+                prompt.setEscapeButton( QMessageBox::Abort );
+                while ( true ) {
+                    const int response = prompt.exec();
+                    if ( response == QMessageBox::Help ) {
+                        openDocument( CalibrationGuideName, CalibrationGuideUrl, "normal-offset-calibration" );
+                        continue;
+                    }
+                    active = response == QMessageBox::Apply;
+                    break;
+                }
                 if ( !active ) {
                     QSignalBlocker blocker( ui->actionCalibrateOffset );
                     ui->actionCalibrateOffset->setChecked( false );
@@ -681,6 +699,14 @@ MainWindow::MainWindow( HantekDsoControl *dsoControl, DsoSettings *settings, Exp
 
     connect( ui->actionUserManual, &QAction::triggered, this, [ this ]() { openDocument( UserManualName ); } );
 
+    connect( ui->actionCalibrationGuide, &QAction::triggered, this, [ this ]() {
+        openDocument( CalibrationGuideName, CalibrationGuideUrl, "quick-reference" );
+    } );
+
+    connect( ui->actionAboutModification, &QAction::triggered, this, [ this ]() {
+        openDocument( CalibrationGuideName, ForkAboutUrl, "about-this-modification" );
+    } );
+
     connect( ui->actionACmodification, &QAction::triggered, this, [ this ]() { openDocument( ACModificationName ); } );
 
     connect( ui->actionFrequencyGeneratorModification, &QAction::triggered, this,
@@ -696,7 +722,14 @@ MainWindow::MainWindow( HantekDsoControl *dsoControl, DsoSettings *settings, Exp
         QMessageBox::about(
             this, QString( "%1 (%2)" ).arg( QCoreApplication::applicationName(), VERSION ),
             QString( tr( "<p>Open source software for Hantek6022 USB oscilloscopes</p>"
-                         "<p>Maintainer: Martin Homuth-Rosemann</p>"
+                         "<p><b>Intel macOS-focused modification</b><br/>"
+                         "Independently maintained by AB for Intel x86_64 macOS.<br/>"
+                         "<a href='https://github.com/TempAB/MacOs-OpenHantek6022'>"
+                         "github.com/TempAB/MacOs-OpenHantek6022</a></p>"
+                         "<p><b>Original OpenHantek6022 project</b><br/>"
+                         "Maintainer: Martin Homuth-Rosemann<br/>"
+                         "<a href='https://github.com/OpenHantek/OpenHantek6022'>"
+                         "github.com/OpenHantek/OpenHantek6022</a></p>"
                          "<p>Copyright &copy; 2010, 2011 Oliver Haag</p>"
                          "<p>Copyright &copy; 2012-%1 OpenHantek community<br/>"
                          "<a href='https://github.com/OpenHantek'>https://github.com/OpenHantek</a></p>"
@@ -915,12 +948,26 @@ void MainWindow::screenShot( screenshotType_t screenshotType, bool autoSafe ) {
 }
 
 
-bool MainWindow::openDocument( QString docName ) {
+bool MainWindow::openDocument( const QString &docName, const QString &fallbackUrl, const QString &fragment ) {
     QUrl url;
-    if ( QFile( DocPath + docName ).exists() )
-        url = QUrl::fromLocalFile( QFileInfo( DocPath + docName ).absoluteFilePath() );
-    else
-        url = QUrl( DocUrl + docName );
+    QStringList localCandidates;
+#if defined( Q_OS_MACOS )
+    localCandidates << QDir( QCoreApplication::applicationDirPath() )
+                           .filePath( "../Resources/documents/" + docName );
+#endif
+    localCandidates << DocPath + docName;
+
+    for ( const QString &candidate : localCandidates ) {
+        if ( QFile::exists( candidate ) ) {
+            url = QUrl::fromLocalFile( QFileInfo( candidate ).absoluteFilePath() );
+            if ( !fragment.isEmpty() )
+                url.setFragment( fragment );
+            break;
+        }
+    }
+
+    if ( url.isEmpty() )
+        url = QUrl( fallbackUrl.isEmpty() ? DocUrl + docName : fallbackUrl );
     if ( verboseLevel > 2 )
         qDebug() << "  " << url;
     return QDesktopServices::openUrl( url );

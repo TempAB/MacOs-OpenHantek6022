@@ -14,5 +14,6 @@ add_custom_command(TARGET ${PROJECT_NAME}
         COMMAND ${CMAKE_COMMAND} -E copy_if_different "${SRC_DOCS_DIR}/HANTEK6022_AC_Modification.pdf" "$<TARGET_FILE_DIR:${PROJECT_NAME}>/${TARGET_DOCUMENTS}"
         COMMAND ${CMAKE_COMMAND} -E copy_if_different "${SRC_DOCS_DIR}/HANTEK6022_Frequency_Generator_Modification.pdf" "$<TARGET_FILE_DIR:${PROJECT_NAME}>/${TARGET_DOCUMENTS}"
         COMMAND ${CMAKE_COMMAND} -E copy_if_different "${SRC_DOCS_DIR}/OpenHantek6022_zadig_Win10.pdf" "$<TARGET_FILE_DIR:${PROJECT_NAME}>/${TARGET_DOCUMENTS}"
-        COMMENT "Copy manual and documentation pdf files into ${PROJECT_NAME}/${TARGET_DOCUMENTS}"
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different "${SRC_DOCS_DIR}/OpenHantek6022_Calibration_and_EEPROM_Safety.html" "$<TARGET_FILE_DIR:${PROJECT_NAME}>/${TARGET_DOCUMENTS}"
+        COMMENT "Copy manual and documentation files into ${PROJECT_NAME}/${TARGET_DOCUMENTS}"
 )
