@@ -200,18 +200,19 @@ Commits should include:
 Signed-off-by: AB <174647079+TempAB@users.noreply.github.com>
 ```
 
-## Local-Only Files Present During This Handoff
+## Local-Only Project Notes
 
-The following files were untracked and therefore were not stored on GitHub:
+The repository-root `.codex-notes` directory is ignored by Git. It currently
+contains:
 
 ```text
-OpenHantek6022 Folder info.rtf
-~$enHantek6022 Folder info.rtf
+.codex-notes/OpenHantek6022 Folder info.rtf
 ```
 
-The second name appears to be a temporary document lock file. Close the
-application editing the RTF before moving the repository. Moving the complete
-repository folder will carry local files; cloning from GitHub will not.
+Temporary editor lock files created inside that directory are ignored as well.
+Close the application editing the RTF before moving the repository. Moving the
+complete repository folder will carry `.codex-notes`; cloning from GitHub will
+not.
 
 ## Status and Resume Procedure
 
