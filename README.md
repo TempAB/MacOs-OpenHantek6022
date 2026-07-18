@@ -178,33 +178,82 @@ If you want to use the LA part, then [sigrok](https://sigrok.org) is the way to 
 There is no point in supporting the LA input from OpenHantek.
 
 ### Offset Calibration
-The oscilloscope has quite a large zero point error. To calibrate the offset quickly, simply proceed as follows:
-1. Short-circuit both inputs, e.g. with a 50Ω terminating plug or by short-circuiting the probe inputs.
-2. Enable both channels and set a slow timebase of 10..100 ms/div, resulting sample rate is 100..10 kS/s.
-3. Activate the menu setting Oscilloscope/Calibrate Offset.
-4. Slowly select all voltage settings for CH1 and CH2 one after the other. The status bar reports each completed range.
-5. After all 16 channel/range combinations are complete, deactivate the menu setting Oscilloscope/Calibrate Offset.
 
-The offset correction is now active and is saved immediately in the device-specific `*.ini` file. The previous file is
-preserved as `*.ini.bak`. Online offset calibration does not modify the oscilloscope EEPROM.
+The oscilloscope has a relatively large zero-point error. Normal offset calibration measures the residual error and
+stores it in a device-specific INI file; it never writes the oscilloscope EEPROM.
+
+#### Required measurement procedure
+
+1. Short-circuit both inputs, for example with 50 Ω terminating plugs or shorted probe inputs.
+2. Enable both channels.
+3. Select a slow timebase of 10..100 ms/div so the sample rate is between 10 and 100 kS/s.
+4. Activate *Oscilloscope/Calibrate Offset* and accept the confirmation.
+5. Slowly select all eight voltage ranges for CH1 and CH2. Wait for the status bar to report each range complete before
+   moving to the next one.
+6. Deactivate *Calibrate Offset* only after all 16 channel/range combinations have been reported complete.
+
+The first frame after each range change is discarded. Two valid, stable measurements are required for a range;
+clipped, out-of-range, or unstable measurements are rejected and retried. Ending calibration before all 16
+combinations are complete cancels the run without changing the active INI.
+
+A completed calibration is written and verified immediately. If an INI already exists, the previous file is
+preserved as `*.ini.bak`; a failed save or verification restores it. At sample rates below 30 MS/s, the application
+uses the hardware low-speed EEPROM calibration plus the INI `[offset]` residuals. At 30 MS/s and above, it uses the
+protected high-speed EEPROM calibration plus `[offset_high]`. A normal low-speed calibration changes `[offset]` only.
 
 On macOS, calibration files are stored in
 `~/Library/Application Support/OpenHantek/OpenHantek6022/Calibration`. An existing calibration file under
 `~/.config/OpenHantek` is copied and verified automatically the first time the new location is used; the original is
 retained as a migration backup. Use *Oscilloscope/Show Calibration Folder* to reveal the active folder in Finder.
 
-*Oscilloscope/EEPROM Calibration Safety* always begins by reading the 80-byte calibration region twice and requiring
-both reads to match. It creates a timestamped folder under `Calibration/EEPROM Backups` containing the exact
-calibration-region backup, a snapshot of the active INI file, a proposed low-speed-offset image, SHA-256 checksums,
-and a readable report.
+#### EEPROM calibration safety
 
-The advanced EEPROM-update checkbox is unchecked by default and is never remembered. When it remains unchecked, the
-action is a read-only dry run and neither the EEPROM nor active INI is changed. Selecting it requires a second
-explicit confirmation. The guarded update writes only four aligned 8-byte low-speed offset chunks, verifies the
-complete 80-byte readback, and automatically restores the original chunks if any write, readback, INI, or audit step
-fails. After a verified update, low-speed INI residuals are zeroed to prevent double correction; the previous
-residuals are retained separately under `[offset_high]` for high-speed sampling. The pre-update INI and EEPROM
-calibration region remain in the timestamped safety folder.
+*Oscilloscope/EEPROM Calibration Safety* is an advanced, manual operation for incorporating saved low-speed INI
+residuals into hardware calibration. It is not part of normal offset calibration. The safe default is a read-only dry
+run: leave *Also back up and update the device EEPROM (advanced)* unchecked.
+
+Every dry run or update reads the complete 80-byte calibration region twice and requires exact agreement. It then
+creates a timestamped folder under `Calibration/EEPROM Backups` containing the exact EEPROM backup, active INI
+snapshot, proposed low-speed candidate, readable report, and SHA-256 manifest. The report lists the raw and effective
+residual, null-window decision, calculated centre, and original/candidate bytes for every channel and range.
+
+The dialog exposes a zero-centred **null half-width** in ADC counts. It applies only while building the low-speed
+EEPROM candidate; it does not alter the saved INI, normal calibration measurements, or protected high-speed EEPROM
+values. The selector resets to `0.30` whenever the dialog opens and is never persisted.
+
+| Selection | Candidate rule |
+| --- | --- |
+| `0.00` | Disable null filtering; retain every finite residual. |
+| `0.01` through `0.50` | Ignore a residual when `abs(residual) <= null half-width`; retain it when it is outside the window. |
+| `0.30` | Hardware-validated default, selected from an eight-run, 128-result repeatability dataset. |
+
+The `0.30` default is deliberately rounded above the dataset's `0.29` statistical starting value. Lower values are
+more sensitive to measurement noise and may propose unnecessary EEPROM changes. Higher values may hide a real
+low-speed correction. Change the default only when new repeatability data under representative hardware,
+temperature, and power-cycle conditions supports a different threshold.
+
+After null filtering, the proposed offsets are converted to the EEPROM byte representation and the entire 80-byte
+candidate is compared with the current EEPROM. If it is byte-identical, the result is reported as
+`NO MATERIAL CHANGE; EEPROM NOT WRITTEN`. This block applies even if the advanced update option was selected.
+
+#### Rules for a physical EEPROM update
+
+- Complete and save a normal offset calibration first.
+- Run a fresh read-only dry run with the intended null half-width. Review the report, candidate, and checksums before
+  authorizing any write.
+- Repeat *EEPROM Calibration Safety*, explicitly select the advanced option, and accept the separate physical-write
+  confirmation. The advanced selection and null value reset every time the dialog opens.
+- Keep USB, oscilloscope power, and Mac power stable until the verified result is displayed. Do not disconnect or
+  suspend the computer during the transaction.
+- Do not attempt a write when the dry run reports no material change. Selecting the advanced option cannot override
+  the exact byte-equality guard.
+- Preserve the timestamped safety folder. It contains the material required to review or recover the transaction.
+
+An authorized update can write only four aligned 8-byte low-speed offset chunks at EEPROM addresses `0x08`, `0x10`,
+`0x38`, and `0x40`. A complete 80-byte readback must match the candidate exactly. Any write, readback, INI, or audit
+failure triggers restoration of the original chunks followed by another full readback. After a verified update,
+low-speed `[offset]` residuals are zeroed to prevent double correction, the prior high-speed residuals remain under
+`[offset_high]`, and `[eeprom] replace_eeprom=false` is verified.
 
 ### OpenGL Support
 OpenHantek6022 uses the *OpenGL* graphics library to display the data. It requires a graphics card that supports

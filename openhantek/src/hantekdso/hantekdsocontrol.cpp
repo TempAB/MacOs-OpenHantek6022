@@ -21,6 +21,10 @@
 using namespace Hantek;
 using namespace Dso;
 
+constexpr double HantekDsoControl::EEPROM_NULL_HALF_WIDTH_DEFAULT;
+constexpr double HantekDsoControl::EEPROM_NULL_HALF_WIDTH_MIN;
+constexpr double HantekDsoControl::EEPROM_NULL_HALF_WIDTH_MAX;
+
 struct EEPROMCalibrationBundle {
     QString outputDirectory;
     QString reportPath;
@@ -35,6 +39,10 @@ struct EEPROMCalibrationBundle {
     QByteArray candidateBytes;
     QByteArray iniContents;
     QByteArray preparationReport;
+    double nullHalfWidth = HantekDsoControl::EEPROM_NULL_HALF_WIDTH_DEFAULT;
+    unsigned suppressedResidualCount = 0;
+    unsigned appliedResidualCount = 0;
+    bool candidateDiffers = false;
     double persistedOffset[ HANTEK_GAIN_STEPS ][ HANTEK_CHANNEL_NUMBER ] = {};
     double persistedHighSpeedOffset[ HANTEK_GAIN_STEPS ][ HANTEK_CHANNEL_NUMBER ] = {};
 };
@@ -849,8 +857,8 @@ bool HantekDsoControl::saveOffsetCalibration() {
 }
 
 
-bool HantekDsoControl::prepareEEPROMCalibrationBundle( bool writeRequested, EEPROMCalibrationBundle &bundle,
-                                                        QString &errorMessage ) {
+bool HantekDsoControl::prepareEEPROMCalibrationBundle( bool writeRequested, double nullHalfWidth,
+                                                        EEPROMCalibrationBundle &bundle, QString &errorMessage ) {
     const auto fail = [ this, &bundle, &errorMessage ]( const QString &reason ) {
         errorMessage = tr( "EEPROM safety preparation failed: %1 EEPROM NOT WRITTEN." ).arg( reason );
         if ( !bundle.outputDirectory.isEmpty() )
@@ -858,6 +866,13 @@ bool HantekDsoControl::prepareEEPROMCalibrationBundle( bool writeRequested, EEPR
     };
 
     static_assert( sizeof( CalibrationValues ) == 80, "Unexpected EEPROM calibration layout" );
+    if ( !qIsFinite( nullHalfWidth ) || nullHalfWidth < EEPROM_NULL_HALF_WIDTH_MIN ||
+         nullHalfWidth > EEPROM_NULL_HALF_WIDTH_MAX ) {
+        fail( tr( "the null half-width is outside the supported 0.00 to 0.50 ADC-count range." ) );
+        return false;
+    }
+    bundle.nullHalfWidth = nullHalfWidth;
+
     if ( offsetCalibrationActive ) {
         fail( tr( "finish or cancel offset calibration first." ) );
         return false;
@@ -979,8 +994,10 @@ bool HantekDsoControl::prepareEEPROMCalibrationBundle( bool writeRequested, EEPR
 
     QString calculationReport;
     QTextStream calculations( &calculationReport );
-    calculations << "Range\tChannel\tEEPROM addresses\tOriginal interpretation\tOriginal centre\tINI residual\tCandidate centre\t"
-                    "Original bytes\tCandidate bytes\n";
+    calculations
+        << "Range\tChannel\tEEPROM addresses\tOriginal interpretation\tOriginal centre (ADC count)\t"
+           "Raw INI residual (ADC count)\tEffective residual (ADC count)\tNull-window decision\t"
+           "Candidate centre (ADC count)\tOriginal bytes\tCandidate bytes\n";
 
     for ( int gainIndex = 0; gainIndex < HANTEK_GAIN_STEPS; ++gainIndex ) {
         for ( int channel = 0; channel < HANTEK_CHANNEL_NUMBER; ++channel ) {
@@ -989,7 +1006,19 @@ bool HantekDsoControl::prepareEEPROMCalibrationBundle( bool writeRequested, EEPR
             const bool originalBytesValid =
                 validCalibrationByte( originalRaw ) && validCalibrationByte( originalFine );
             const double originalOffset = bytesToOffset( originalRaw, originalFine );
-            const double proposedOffset = originalOffset + bundle.persistedOffset[ gainIndex ][ channel ];
+            const double rawResidual = bundle.persistedOffset[ gainIndex ][ channel ];
+            const bool residualSuppressed =
+                nullHalfWidth > 0.0 && qAbs( rawResidual ) <= nullHalfWidth;
+            const double effectiveResidual = residualSuppressed ? 0.0 : rawResidual;
+            const char *nullDecision =
+                nullHalfWidth == 0.0
+                    ? "filter disabled -> retained"
+                    : ( residualSuppressed ? "inside window -> ignored" : "outside window -> retained" );
+            if ( residualSuppressed )
+                ++bundle.suppressedResidualCount;
+            else
+                ++bundle.appliedResidualCount;
+            const double proposedOffset = originalOffset + effectiveResidual;
             uint8_t candidateRaw = 0;
             uint8_t candidateFine = 0;
             if ( !offsetToBytes( proposedOffset, candidateRaw, candidateFine ) ) {
@@ -1009,7 +1038,9 @@ bool HantekDsoControl::prepareEEPROMCalibrationBundle( bool writeRequested, EEPR
                          << QString::number( fineAddress, 16 ).toUpper() << "\t"
                          << ( originalBytesValid ? "EEPROM value" : "invalid bytes -> app default" ) << "\t"
                          << QString::number( originalOffset, 'f', 3 ) << "\t"
-                         << QString::number( bundle.persistedOffset[ gainIndex ][ channel ], 'f', 3 ) << "\t"
+                         << QString::number( rawResidual, 'f', 9 ) << "\t"
+                         << QString::number( effectiveResidual, 'f', 9 ) << "\t"
+                         << nullDecision << "\t"
                          << QString::number( bytesToOffset( candidateRaw, candidateFine ), 'f', 3 ) << "\t0x"
                          << hexByte( originalRaw ) << "/0x" << hexByte( originalFine ) << "\t0x"
                          << hexByte( candidateRaw ) << "/0x" << hexByte( candidateFine ) << "\n";
@@ -1025,6 +1056,7 @@ bool HantekDsoControl::prepareEEPROMCalibrationBundle( bool writeRequested, EEPR
 
     bundle.candidateBytes =
         QByteArray( reinterpret_cast< const char * >( &candidateValues ), int( sizeof( CalibrationValues ) ) );
+    bundle.candidateDiffers = bundle.candidateBytes != bundle.originalBytes;
     for ( int index = 0; index < bundle.candidateBytes.size(); ++index ) {
         const bool permittedLowSpeedByte = index < 16 || ( index >= 48 && index < 64 );
         if ( bundle.candidateBytes[ index ] != bundle.originalBytes[ index ] && !permittedLowSpeedByte ) {
@@ -1047,13 +1079,16 @@ bool HantekDsoControl::prepareEEPROMCalibrationBundle( bool writeRequested, EEPR
         QDir( bundle.outputDirectory ).filePath( "eeprom-calibration-original-80-bytes.bin" );
     bundle.candidatePath =
         QDir( bundle.outputDirectory )
-            .filePath( writeRequested ? "eeprom-calibration-candidate-80-bytes.bin"
-                                      : "eeprom-calibration-candidate-80-bytes-NOT-WRITTEN.bin" );
+            .filePath( writeRequested && bundle.candidateDiffers
+                           ? "eeprom-calibration-candidate-80-bytes.bin"
+                           : "eeprom-calibration-candidate-80-bytes-NOT-WRITTEN.bin" );
     bundle.iniSnapshotPath =
         QDir( bundle.outputDirectory ).filePath( "calibration-ini-snapshot.ini" );
-    bundle.reportPath =
-        QDir( bundle.outputDirectory )
-            .filePath( writeRequested ? "EEPROM-pre-write-safety-report.txt" : "EEPROM-dry-run-report.txt" );
+    bundle.reportPath = QDir( bundle.outputDirectory )
+                            .filePath( !bundle.candidateDiffers
+                                           ? "EEPROM-no-material-change-report.txt"
+                                           : ( writeRequested ? "EEPROM-pre-write-safety-report.txt"
+                                                              : "EEPROM-dry-run-report.txt" ) );
     bundle.checksumsPath = QDir( bundle.outputDirectory ).filePath( "SHA256SUMS.txt" );
 
     if ( !writeFileAtomically( bundle.originalPath, bundle.originalBytes ) ) {
@@ -1071,24 +1106,42 @@ bool HantekDsoControl::prepareEEPROMCalibrationBundle( bool writeRequested, EEPR
 
     QString reportText;
     QTextStream report( &reportText );
-    report << ( writeRequested ? "OpenHantek6022 EEPROM pre-write safety preparation\n"
-                               : "OpenHantek6022 EEPROM calibration safety dry run\n" )
+    report << ( !bundle.candidateDiffers
+                    ? "OpenHantek6022 EEPROM calibration no-material-change result\n"
+                    : ( writeRequested ? "OpenHantek6022 EEPROM pre-write safety preparation\n"
+                                       : "OpenHantek6022 EEPROM calibration safety dry run\n" ) )
            << "====================================================\n\n"
-           << ( writeRequested ? "STATUS AT PREPARATION: EEPROM NOT YET WRITTEN\n\n"
-                               : "RESULT: EEPROM NOT WRITTEN\n\n" )
+           << ( !bundle.candidateDiffers
+                    ? "RESULT: NO MATERIAL CHANGE; EEPROM NOT WRITTEN\n\n"
+                    : ( writeRequested ? "STATUS AT PREPARATION: EEPROM NOT YET WRITTEN\n\n"
+                                       : "RESULT: EEPROM NOT WRITTEN\n\n" ) )
            << "UTC timestamp: " << bundle.timestamp << "\n"
            << "Device model: " << bundle.deviceModel << "\n"
            << "Device serial: " << bundle.deviceSerial << "\n"
            << "Calibration region: 80 bytes at EEPROM addresses 0x08 through 0x57\n"
-           << "INI source: " << calibrationFileName << "\n\n"
+           << "INI source: " << calibrationFileName << "\n"
+           << "Null half-width: " << QString::number( bundle.nullHalfWidth, 'f', 2 ) << " ADC count\n"
+           << "Null filtering: " << ( bundle.nullHalfWidth > 0.0 ? "enabled" : "disabled" ) << "\n"
+           << "Residuals ignored by null window: " << bundle.suppressedResidualCount << " of 16\n"
+           << "Residuals retained for candidate: " << bundle.appliedResidualCount << " of 16\n"
+           << "Advanced physical write requested: " << ( writeRequested ? "yes" : "no" ) << "\n"
+           << "Physical write permitted after byte comparison: "
+           << ( writeRequested && bundle.candidateDiffers ? "yes" : "no" ) << "\n"
+           << "Post-quantization candidate differs from EEPROM: "
+           << ( bundle.candidateDiffers ? "yes" : "no" ) << "\n\n"
            << "Safety checks completed:\n"
            << "- Two independent 80-byte device reads matched exactly.\n"
            << "- The original EEPROM backup was written atomically and read back from disk.\n"
            << "- The saved calibration INI was copied atomically and read back from disk.\n"
            << "- The candidate was written atomically and read back from disk.\n"
+           << "- Each low-speed residual was compared with the selected zero-centered null window.\n"
+           << "- Residuals at or inside an enabled null half-width were replaced with zero before\n"
+           << "  the candidate bytes were calculated.\n"
            << "- Candidate changes are restricted to low-speed raw offsets (0x08-0x17)\n"
            << "  and low-speed fine offsets (0x38-0x47).\n"
            << "- High-speed offsets, gain calibration, and all other bytes are unchanged.\n"
+           << "- The final write decision uses exact equality of the complete 80-byte images after\n"
+           << "  EEPROM byte quantization; an identical candidate cannot be written.\n"
            << "- Invalid original offset byte pairs are shown explicitly and interpreted as centre 128,\n"
            << "  matching the application's existing calibration behaviour.\n"
            << "- No USB write command had been issued when this preparation report was created.\n"
@@ -1104,7 +1157,11 @@ bool HantekDsoControl::prepareEEPROMCalibrationBundle( bool writeRequested, EEPR
            << "- INI snapshot: " << sha256( bundle.iniContents ) << "\n\n"
            << "Proposed low-speed offset changes:\n"
            << calculationReport << "\n";
-    if ( writeRequested )
+    if ( !bundle.candidateDiffers )
+        report << "The complete post-quantization candidate is byte-identical to the current EEPROM.\n"
+               << "The physical write path is blocked even when the advanced update option was selected.\n"
+               << "RESULT: NO MATERIAL CHANGE; EEPROM NOT WRITTEN\n";
+    else if ( writeRequested )
         report << "A separate EEPROM-update-result.txt file must record the guarded transaction outcome.\n"
                << "STATUS AT PREPARATION: EEPROM NOT YET WRITTEN\n";
     else
@@ -1133,16 +1190,21 @@ bool HantekDsoControl::prepareEEPROMCalibrationBundle( bool writeRequested, EEPR
 }
 
 
-void HantekDsoControl::prepareEEPROMCalibrationDryRun() {
+void HantekDsoControl::prepareEEPROMCalibrationDryRun( double nullHalfWidth ) {
     EEPROMCalibrationBundle bundle;
     QString message;
-    if ( !prepareEEPROMCalibrationBundle( false, bundle, message ) ) {
+    if ( !prepareEEPROMCalibrationBundle( false, nullHalfWidth, bundle, message ) ) {
         emit statusMessage( message, 0 );
         emit eepromCalibrationDryRunFinished( false, bundle.outputDirectory, QString(), message );
         return;
     }
 
-    message = tr( "EEPROM safety files created at %1. EEPROM NOT WRITTEN." ).arg( bundle.outputDirectory );
+    message =
+        bundle.candidateDiffers
+            ? tr( "EEPROM safety files created at %1. EEPROM NOT WRITTEN." ).arg( bundle.outputDirectory )
+            : tr( "No material low-speed calibration change remains after null filtering and EEPROM byte "
+                  "quantization. Safety files created at %1. EEPROM NOT WRITTEN." )
+                  .arg( bundle.outputDirectory );
     emit statusMessage( message, 0 );
     emit eepromCalibrationDryRunFinished( true, bundle.outputDirectory, bundle.reportPath, message );
 }
@@ -1237,12 +1299,22 @@ bool HantekDsoControl::reconcileCalibrationIniAfterEEPROMWrite( const EEPROMCali
 }
 
 
-void HantekDsoControl::updateEEPROMCalibrationSafely() {
+void HantekDsoControl::updateEEPROMCalibrationSafely( double nullHalfWidth ) {
     EEPROMCalibrationBundle bundle;
     QString message;
-    if ( !prepareEEPROMCalibrationBundle( true, bundle, message ) ) {
+    if ( !prepareEEPROMCalibrationBundle( true, nullHalfWidth, bundle, message ) ) {
         emit statusMessage( message, 0 );
-        emit eepromCalibrationUpdateFinished( false, true, bundle.outputDirectory, QString(), message );
+        emit eepromCalibrationUpdateFinished( false, false, true, bundle.outputDirectory, QString(), message );
+        return;
+    }
+
+    if ( !bundle.candidateDiffers ) {
+        message =
+            tr( "No material low-speed calibration change remains after null filtering and EEPROM byte "
+                "quantization. EEPROM NOT WRITTEN. Safety bundle: %1" )
+                .arg( bundle.outputDirectory );
+        emit statusMessage( message, 0 );
+        emit eepromCalibrationUpdateFinished( true, false, true, bundle.outputDirectory, bundle.reportPath, message );
         return;
     }
 
@@ -1267,8 +1339,10 @@ void HantekDsoControl::updateEEPROMCalibrationSafely() {
     QString transactionError;
 
     const QByteArray preparedState =
-        QString( "STATE: PREPARED; EEPROM NOT WRITTEN\nUTC timestamp: %1\nOriginal backup: %2\nCandidate: %3\n" )
-            .arg( bundle.timestamp, bundle.originalPath, bundle.candidatePath )
+        QString( "STATE: PREPARED; EEPROM NOT WRITTEN\nUTC timestamp: %1\nNull half-width: %2 ADC count\n"
+                 "Original backup: %3\nCandidate: %4\n" )
+            .arg( bundle.timestamp, QString::number( bundle.nullHalfWidth, 'f', 2 ), bundle.originalPath,
+                  bundle.candidatePath )
             .toUtf8();
     if ( !writeFileAtomically( statePath, preparedState ) )
         transactionError = tr( "The persistent pre-write state marker could not be saved." );
@@ -1292,9 +1366,10 @@ void HantekDsoControl::updateEEPROMCalibrationSafely() {
 
         if ( transactionError.isEmpty() ) {
             const QByteArray writingState =
-                QString( "STATE: WRITE IN PROGRESS\nUTC timestamp: %1\nDo not remove this safety folder.\n"
-                         "Original backup: %2\nCandidate: %3\n" )
-                    .arg( bundle.timestamp, bundle.originalPath, bundle.candidatePath )
+                QString( "STATE: WRITE IN PROGRESS\nUTC timestamp: %1\nNull half-width: %2 ADC count\n"
+                         "Do not remove this safety folder.\nOriginal backup: %3\nCandidate: %4\n" )
+                    .arg( bundle.timestamp, QString::number( bundle.nullHalfWidth, 'f', 2 ), bundle.originalPath,
+                          bundle.candidatePath )
                     .toUtf8();
             if ( !writeFileAtomically( statePath, writingState ) ) {
                 transactionError = tr( "The persistent in-progress state marker could not be saved." );
@@ -1342,7 +1417,11 @@ void HantekDsoControl::updateEEPROMCalibrationSafely() {
                    << "RESULT: EEPROM UPDATE VERIFIED\n\n"
                    << "UTC timestamp: " << bundle.timestamp << "\n"
                    << "Device model: " << bundle.deviceModel << "\n"
-                   << "Device serial: " << bundle.deviceSerial << "\n\n"
+                   << "Device serial: " << bundle.deviceSerial << "\n"
+                   << "Null half-width: " << QString::number( bundle.nullHalfWidth, 'f', 2 )
+                   << " ADC count\n"
+                   << "Residuals ignored by null window: " << bundle.suppressedResidualCount << " of 16\n"
+                   << "Residuals retained for candidate: " << bundle.appliedResidualCount << " of 16\n\n"
                    << "Verified transaction:\n"
                    << "- The original 80-byte calibration region was backed up before writing.\n"
                    << "- Only four aligned 8-byte chunks were written at EEPROM addresses\n"
@@ -1368,8 +1447,9 @@ void HantekDsoControl::updateEEPROMCalibrationSafely() {
 
         if ( transactionError.isEmpty() ) {
             const QByteArray verifiedState =
-                QString( "STATE: VERIFIED\nUTC timestamp: %1\nEEPROM readback and INI reconciliation succeeded.\n" )
-                    .arg( bundle.timestamp )
+                QString( "STATE: VERIFIED\nUTC timestamp: %1\nNull half-width: %2 ADC count\n"
+                         "EEPROM readback and INI reconciliation succeeded.\n" )
+                    .arg( bundle.timestamp, QString::number( bundle.nullHalfWidth, 'f', 2 ) )
                     .toUtf8();
             if ( !writeFileAtomically( statePath, verifiedState ) )
                 transactionError = tr( "The verified transaction state marker could not be saved." );
@@ -1446,6 +1526,9 @@ void HantekDsoControl::updateEEPROMCalibrationSafely() {
                 << "UTC timestamp: " << bundle.timestamp << "\n"
                 << "Device model: " << bundle.deviceModel << "\n"
                 << "Device serial: " << bundle.deviceSerial << "\n"
+                << "Null half-width: " << QString::number( bundle.nullHalfWidth, 'f', 2 ) << " ADC count\n"
+                << "Residuals ignored by null window: " << bundle.suppressedResidualCount << " of 16\n"
+                << "Residuals retained for candidate: " << bundle.appliedResidualCount << " of 16\n"
                 << "Failure: " << transactionError << "\n"
                 << "EEPROM write attempted: " << ( writeAttempted ? "yes" : "no" ) << "\n"
                 << "Rollback: "
@@ -1459,10 +1542,10 @@ void HantekDsoControl::updateEEPROMCalibrationSafely() {
         const QByteArray failureReport = failureText.toUtf8();
         writeFileAtomically( resultPath, failureReport );
         const QByteArray failureState =
-            QString( "STATE: %1\nUTC timestamp: %2\nFailure: %3\n" )
+            QString( "STATE: %1\nUTC timestamp: %2\nNull half-width: %3 ADC count\nFailure: %4\n" )
                 .arg( writeAttempted ? ( rollbackSucceeded ? "ROLLBACK VERIFIED" : "ROLLBACK FAILED" )
                                      : "CANCELLED BEFORE WRITE",
-                      bundle.timestamp, transactionError )
+                      bundle.timestamp, QString::number( bundle.nullHalfWidth, 'f', 2 ), transactionError )
                 .toUtf8();
         writeFileAtomically( statePath, failureState );
 
@@ -1474,13 +1557,14 @@ void HantekDsoControl::updateEEPROMCalibrationSafely() {
         emit statusMessage( message, 0 );
         if ( !rollbackSucceeded )
             emit communicationError();
-        emit eepromCalibrationUpdateFinished( false, rollbackSucceeded, bundle.outputDirectory, resultPath, message );
+        emit eepromCalibrationUpdateFinished( false, writeAttempted, rollbackSucceeded, bundle.outputDirectory,
+                                              resultPath, message );
         return;
     }
 
     message = tr( "EEPROM update and readback verified. Safety bundle: %1" ).arg( bundle.outputDirectory );
     emit statusMessage( message, 0 );
-    emit eepromCalibrationUpdateFinished( true, true, bundle.outputDirectory, resultPath, message );
+    emit eepromCalibrationUpdateFinished( true, true, true, bundle.outputDirectory, resultPath, message );
 }
 
 
