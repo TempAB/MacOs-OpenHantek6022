@@ -229,6 +229,7 @@ void HantekDsoControl::prepareForShutdown() {
     if ( verboseLevel > 1 )
         qDebug() << " HDC::prepareForShutdown()";
     offsetRepeatabilityStudyActive = false;
+    offsetRepeatabilityStudyFinalizationPending = false;
     if ( offsetCalibrationActive ) {
         memcpy( offsetCorrection, offsetCalibrationOriginal, sizeof( offsetCorrection ) );
         offsetCalibrationActive = false;
@@ -1806,6 +1807,7 @@ void HantekDsoControl::startOffsetRepeatabilityStudy() {
     offsetRepeatabilityStudyDeviceSerial = deviceSerial;
     offsetRepeatabilityStudyIniContents = iniContents;
     offsetRepeatabilityStudyEEPROMBytes = eepromBytes;
+    offsetRepeatabilityStudyFinalizationPending = false;
     offsetRepeatabilityStudyRun = 0;
     offsetRepeatabilityFrameEvents.clear();
     offsetRepeatabilityResults.clear();
@@ -1865,7 +1867,11 @@ void HantekDsoControl::completeOffsetRepeatabilityRun() {
     offsetRepeatabilityRunCompleted[ offsetRepeatabilityStudyRun ] =
         QDateTime::currentDateTimeUtc().toString( Qt::ISODateWithMs );
     if ( offsetRepeatabilityStudyRun + 1 >= OFFSET_REPEATABILITY_RUNS ) {
-        finishOffsetRepeatabilityStudy( true );
+        offsetCalibrationActive = false;
+        // Finalization needs exclusive device access. Defer it until sample conversion releases raw/result locks.
+        offsetRepeatabilityStudyFinalizationPending = true;
+        emit statusMessage( tr( "Offset repeatability study run 8 complete. Verifying unchanged calibration data." ),
+                            0 );
         return;
     }
 
@@ -1883,7 +1889,7 @@ void HantekDsoControl::completeOffsetRepeatabilityRun() {
 void HantekDsoControl::finishOffsetRepeatabilityStudy( bool completed, const QString &reason ) {
     offsetCalibrationActive = false;
     offsetRepeatabilityStudyActive = false;
-    emit offsetRepeatabilityStudyStateChanged( false );
+    offsetRepeatabilityStudyFinalizationPending = false;
 
     const unsigned expectedResults = OFFSET_REPEATABILITY_RUNS * HANTEK_GAIN_STEPS * HANTEK_CHANNEL_NUMBER;
     const bool resultCountComplete = offsetRepeatabilityResults.size() == std::size_t( expectedResults );
@@ -2185,6 +2191,7 @@ void HantekDsoControl::finishOffsetRepeatabilityStudy( bool completed, const QSt
     }
 
     emit statusMessage( message, 0 );
+    emit offsetRepeatabilityStudyStateChanged( false );
     emit offsetRepeatabilityStudyFinished( success, offsetRepeatabilityStudyDirectory, reportPath, message );
 }
 
@@ -2396,6 +2403,9 @@ void HantekDsoControl::stateMachine() {
     if ( samplingStarted && raw.valid && ( raw.tag != lastTag || raw.freeRun || refreshNeeded() ) ) {
         lastTag = raw.tag;
         convertRawDataToSamples(); // process samples, apply gain settings etc.
+        // This point is outside convertRawDataToSamples()'s raw/result lock scope.
+        if ( offsetRepeatabilityStudyFinalizationPending )
+            finishOffsetRepeatabilityStudy( true );
         mathChannel->calculate( result );
         QWriteLocker resultLocker( &result.lock );
         if ( !result.freeRunning ) { // trigger mode != NONE

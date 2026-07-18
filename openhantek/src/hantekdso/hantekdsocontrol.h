@@ -269,6 +269,7 @@ class HantekDsoControl : public QObject {
     unsigned offsetCalibrationClippedRejections[ HANTEK_GAIN_STEPS ][ HANTEK_CHANNEL_NUMBER ] = {};
     static constexpr unsigned OFFSET_REPEATABILITY_RUNS = 8;
     bool offsetRepeatabilityStudyActive = false;
+    bool offsetRepeatabilityStudyFinalizationPending = false;
     unsigned offsetRepeatabilityStudyRun = 0;
     QString offsetRepeatabilityStudyTimestamp;
     QString offsetRepeatabilityStudyDirectory;
