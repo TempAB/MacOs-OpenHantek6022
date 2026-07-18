@@ -205,16 +205,25 @@
    </property>
   </action>
   <action name="actionAboutModification">
+   <property name="menuRole">
+    <enum>QAction::NoRole</enum>
+   </property>
    <property name="text">
     <string>About This Intel &amp;macOS Modification</string>
    </property>
   </action>
   <action name="actionAbout">
+   <property name="menuRole">
+    <enum>QAction::NoRole</enum>
+   </property>
    <property name="text">
     <string>&amp;About ..</string>
    </property>
   </action>
   <action name="actionAboutQt">
+   <property name="menuRole">
+    <enum>QAction::NoRole</enum>
+   </property>
    <property name="text">
     <string>About &amp;Qt..</string>
    </property>

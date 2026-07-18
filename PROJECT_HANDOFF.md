@@ -170,6 +170,14 @@ The branch also:
 This help-only branch must pass the Intel GitHub Actions build and receive
 user interface review before it is merged into `main`.
 
+Intel workflow Run 28 passed for commit `3d2a2e0`. The user confirmed that the
+normal-calibration and EEPROM-dialog Help buttons open the correct guide
+sections without starting calibration or an EEPROM operation. Initial macOS
+review found that Qt automatically moved all three `About...` actions out of
+Help because they inherited `TextHeuristicRole`. The follow-up explicitly sets
+those three actions to `QAction::NoRole` so they remain in the requested Help
+menu; a replacement build and menu review are required before merge.
+
 ## Current Device Calibration State
 
 - Model: `DSO-6022BL`
