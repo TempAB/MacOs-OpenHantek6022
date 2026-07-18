@@ -16,12 +16,14 @@ with the physical oscilloscope before they are merged into `main`.
 - Original project: <https://github.com/OpenHantek/OpenHantek6022.git>
 - `origin`: the user's repository
 - `openhantek`: the original project
-- Current `origin/main` baseline: `6858ac6`
+- Final production implementation: `b52c0ea`
 - Final production branch: `codex/eeprom-calibration-final`
 
 The final production branch was created directly from `origin/main`. It contains
 the hardware-validated null-window and identical-candidate safeguards without
-the temporary repeatability-study interface or collection code.
+the temporary repeatability-study interface or collection code. After the
+public-facing README attribution was added, this branch was fast-forwarded into
+`main`.
 
 ## Build Process
 
@@ -221,6 +223,8 @@ Important timestamped bundles:
 - `20260718T154400738Z` — `0.30` null-window dry run after fresh normal
   calibration; 16 of 16 residuals ignored, exact candidate equality, and
   `EEPROM-no-material-change-report.txt`.
+- `20260718T165220276Z` — final production-build smoke test with the same
+  `0.30` no-material-change result; all manifest entries verified.
 
 The repeatability analysis produced a provisional global half-width of `0.29`
 ADC count. The production default was rounded upward to `0.30`. The study
@@ -298,10 +302,11 @@ not.
 ## Status and Resume Procedure
 
 The clean final branch `codex/eeprom-calibration-final` was based directly on
-`origin/main` at `6858ac6`. It intentionally excludes the temporary study
-interface and collection implementation while preserving only the final
-production null-window and identical-candidate safeguards. It has not been
-merged into `main`.
+the previous `origin/main` at `6858ac6`. It intentionally excludes the
+temporary study interface and collection implementation while preserving only
+the final production null-window and identical-candidate safeguards. The
+hardware-tested final implementation, public attribution notice, and corrected
+fork build instructions have been fast-forwarded into `main`.
 
 After relocating or freshly cloning the repository, start a new Codex local
 project at the new folder and ask it to read this file and the calibration

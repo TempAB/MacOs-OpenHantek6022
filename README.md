@@ -1,24 +1,31 @@
-# OpenHantek6022
-[![GitHub CI](https://github.com/OpenHantek/OpenHantek6022/actions/workflows/build.yml/badge.svg)](https://github.com/OpenHantek/OpenHantek6022/actions/workflows/build.yml)
-[![Stability: Active](https://masterminds.github.io/stability/active.svg)](https://masterminds.github.io/stability/active.html)
-[![Downloads total](https://img.shields.io/github/downloads/OpenHantek/OpenHantek6022/total?color=blue)](https://github.com/OpenHantek/OpenHantek6022/releases)
+# OpenHantek6022 — Intel macOS-focused modification
 
-[![GitHub release (latest by date)](https://img.shields.io/github/v/release/OpenHantek/OpenHantek6022)](https://github.com/OpenHantek/OpenHantek6022/releases/latest)
-[![GitHub Release Date](https://img.shields.io/github/release-date/OpenHantek/OpenHantek6022?color=blue)](https://github.com/OpenHantek/OpenHantek6022/releases/latest)
-[![Downloads of latest release](https://img.shields.io/github/downloads/OpenHantek/OpenHantek6022/latest/total?color=blue)](https://github.com/OpenHantek/OpenHantek6022/releases/latest)
+[![Intel macOS DMG](https://github.com/TempAB/MacOs-OpenHantek6022/actions/workflows/build.yml/badge.svg?branch=main)](https://github.com/TempAB/MacOs-OpenHantek6022/actions/workflows/build.yml)
+[![Original project](https://img.shields.io/badge/original-OpenHantek%2FOpenHantek6022-blue)](https://github.com/OpenHantek/OpenHantek6022)
 
-[![GitHub commits since latest release](https://img.shields.io/github/commits-since/OpenHantek/OpenHantek6022/latest?color=lightblue)](https://github.com/OpenHantek/OpenHantek6022/commits/main)
-[![Downloads of latest devdrop](https://img.shields.io/github/downloads/OpenHantek/OpenHantek6022/devdrop/total?color=lightblue)](https://github.com/OpenHantek/OpenHantek6022/releases/tag/devdrop)
+> [!IMPORTANT]
+> This repository is an independently maintained, Intel macOS-focused modification of
+> [OpenHantek6022](https://github.com/OpenHantek/OpenHantek6022), originally developed by Martin
+> Homuth-Rosemann and the OpenHantek contributors. It is not an official upstream release or a replacement for the
+> original cross-platform project. If you are seeking the original Linux, Windows, macOS, or other supported builds,
+> documentation, releases, or project support, please use
+> **[OpenHantek/OpenHantek6022](https://github.com/OpenHantek/OpenHantek6022)**.
 
+This modification is maintained for a specific Intel `x86_64` Mac and has been hardware-tested with a Hantek
+DSO-6022BL. It adds a self-contained Intel macOS DMG workflow, consistent selector behavior, safer persistent offset
+calibration, native macOS calibration storage, and guarded EEPROM-calibration tools. The fork does not run upstream's
+Linux, Windows, Apple Silicon, or other device test matrix.
 
-OpenHantek6022 is a free software for **Hantek DSO6022** USB digital signal oscilloscopes that is actively developed on
-[github.com/OpenHantek/OpenHantek6022](https://github.com/OpenHantek/OpenHantek6022) - but only for Hantek 6022BE/BL and compatible scopes (Voltcraft, Darkwire, Protek, Acetech, etc.).
+OpenHantek6022 is free software for **Hantek DSO6022** USB digital signal oscilloscopes. The underlying project
+supports Hantek 6022BE/BL and compatible scopes such as Voltcraft, Darkwire, Protek, and Acetech devices. Most general
+project information below is inherited from upstream; fork-specific behavior is identified explicitly.
 
 **This project gives no support for its [currently unmaintained](https://github.com/OpenHantek/openhantek/issues/277) predecessor [openhantek](https://github.com/OpenHantek/openhantek).**
 
 <p><img alt="Image of main window on linux" width="100%" src="docs/images/screenshot_mainwindow.png"></p>
 
 #### Content
+* [About This Modification](#about-this-modification)
 * [About OpenHantek6022](#about-openhantek6022)
 * [Features](#features)
 * [AC Coupling](#ac-coupling)
@@ -38,6 +45,22 @@ OpenHantek6022 is a free software for **Hantek DSO6022** USB digital signal osci
 * [Donate](#please-help-the-victims-of-the-war)
 <!-- * [Donate for FSF](#donate-for-fsf) -->
 
+## About This Modification
+
+This repository preserves the original project's license and history while maintaining a focused set of changes for
+Intel macOS use. The principal differences are:
+
+* A GitHub Actions workflow that builds, audits, ad-hoc signs, and packages a self-contained Intel `x86_64` DMG.
+* Standardized hover-wheel, keyboard, and native popup behavior for selectors.
+* Offset calibration that requires all 16 channel/range combinations, rejects unstable measurements, verifies the
+  saved INI, and never writes EEPROM automatically.
+* Native macOS calibration storage with verified migration from the legacy configuration location.
+* Read-only-first EEPROM preparation, exact backups, SHA-256 reports, guarded low-speed writes, complete readback,
+  automatic rollback, an adjustable null window, and an unconditional no-write result for byte-identical candidates.
+
+These changes are documented in the [Offset Calibration](#offset-calibration) section. Users who need the original
+multi-platform project should use [OpenHantek/OpenHantek6022](https://github.com/OpenHantek/OpenHantek6022).
+
 ## About OpenHantek6022
 * OH6022 works with digital USB 2 channel scopes that are based on the Cypress EzUSB processor,
 these devices are typically announced as scopes with a max. sample rate of 48 MS/s
@@ -50,11 +73,10 @@ Supported devices:
   which has [some limitations](https://sigrok.org/wiki/SainSmart_DDS120/Info#Open-source_firmware_details)
   compared to the Hantek scopes (see [#69](https://github.com/OpenHantek/OpenHantek6022/issues/69#issuecomment-607341694)).
 * Demo mode is provided by the `-d` or `--demoMode` command line option.
-* Fully supported operating system: Linux; developed under debian stable (currently *trixie*) for amd64 architecture.
-* Raspberry Pi packages (raspbian stable)
-* Compiles under FreeBSD (packaging / installation: work in progress, thx [tspspi](https://github.com/tspspi)).
-* Other operating systems builds: [Windows](docs/images/screenshot_mainwindow_win.png) (mostly untested) & macOS (completely untested).
-  **No support for non-Linux related issues unless a volunteer steps in!**
+* The original project's fully supported operating system is Linux, developed under Debian stable (currently
+  *trixie*) for amd64, with additional Raspberry Pi, FreeBSD, Windows, and macOS build coverage described upstream.
+* This modification is hardware-tested on Intel `x86_64` macOS only. It does not provide or imply Linux, Windows,
+  Apple Silicon, FreeBSD, Raspberry Pi, or general upstream support.
 * Uses [free open source firmware](https://github.com/Ho-Ro/Hantek6022API), no longer dependent on nonfree Hantek firmware.
 * Extensive [User Manual](docs/OpenHantek6022_User_Manual.pdf) with technical specs and schematics.
 
@@ -107,25 +129,32 @@ A [little HW modification](docs/HANTEK6022_Frequency_Generator_Modification.pdf)
 A [little HW modification](docs/HANTEK6022_AC_Modification.pdf) adds AC coupling. OpenHantek6022 supports this feature since v2.17-rc5 / FW0204.
 
 ## Continuous Integration
-Every commit triggers a workflow on
-[GitHub Actions](https://github.com/OpenHantek/OpenHantek6022/actions/workflows/build_check.yml)
-that builds and packages OpenHantek6022 for:
 
-* Linux (`*_amd64.deb`, `*_arm64.deb`, `*.rpm`, `*.tar.gz`)
-* Windows (<!--`*_mingw_x64.zip`, -->`*_msvc_x64.zip`)
-* macOS - (`*_osx_arm64.dmg`, `*_osx_x86_64.dmg`, `*.tar.gz`)
+Pushes to this fork's `main` and `codex/**` branches run the
+[Intel macOS DMG workflow](https://github.com/TempAB/MacOs-OpenHantek6022/actions/workflows/build.yml). It builds on
+GitHub's `macos-15-intel` runner, bundles non-system runtime dependencies, verifies the application is `x86_64`,
+audits Mach-O load commands for portability, verifies the ad-hoc code signature, and uploads a DMG plus SHA-256
+manifest. Workflow artifacts are retained for 30 days.
 
-[![GitHub CI](https://github.com/OpenHantek/OpenHantek6022/actions/workflows/build.yml/badge.svg)](https://github.com/OpenHantek/OpenHantek6022/actions/workflows/build.yml)
-This status badge here (and on top) show the build status.
+This fork does not run Linux, Windows, Apple Silicon, or general release packaging jobs. Refer to the
+[original project's workflows](https://github.com/OpenHantek/OpenHantek6022/actions) for upstream multi-platform
+builds.
 
 ## Building OpenHantek6022 from source
-The preferred way to run OpenHantek6022 is to build it from source on your system, especially under Linux.
 
-The easiest way to get an up-to-date working code base is to clone the code from here via
+To build this Intel macOS-focused modification, clone this repository:
 
-````git clone https://github.com/OpenHantek/OpenHantek6022.git````
+```sh
+git clone https://github.com/TempAB/MacOs-OpenHantek6022.git
+```
 
-and then build it locally, for this you will need the following software:
+To build the original cross-platform project instead, clone upstream:
+
+```sh
+git clone https://github.com/OpenHantek/OpenHantek6022.git
+```
+
+Building locally requires:
 
 * [CMake 3.12+](https://cmake.org/download/)
 * [Qt 6.2+](https://www1.qt.io/download-open-source/)
@@ -144,6 +173,14 @@ To make building for Linux even easier, I provide two shell scripts:
 If you make small changes to the local source code, it is sufficient to call `make -j4` or `fakeroot make -j4 package` in the `build` directory.
 
 ## Install Prebuilt Binary Packages
+
+Intel macOS DMGs for this modification are available from successful runs of the fork's
+[GitHub Actions workflow](https://github.com/TempAB/MacOs-OpenHantek6022/actions/workflows/build.yml). Select a
+successful `main` run and download its `OpenHantek-...-macos-x86_64` artifact. These artifacts are ad-hoc signed,
+are not Apple-notarized, and expire after 30 days.
+
+For official upstream multi-platform packages and releases, use the original project's resources below.
+
 * [![Downloads of latest release](https://img.shields.io/github/downloads/OpenHantek/OpenHantek6022/latest/total?color=blue)](https://github.com/OpenHantek/OpenHantek6022/releases/latest)
 Download Linux (Ubuntu 2404 LTS), macOS (13) and Windows (MSVC2022) packages for your convenience from the [Releases](https://github.com/OpenHantek/OpenHantek6022/releases) page.
 * [![Downloads of latest devdrop](https://img.shields.io/github/downloads/OpenHantek/OpenHantek6022/devdrop/total?color=lightblue)](https://github.com/OpenHantek/OpenHantek6022/releases/tag/devdrop)
@@ -306,6 +343,11 @@ of this kind of low level hardware. It would have been easy to spend a few bucks
 Please refer also to the [developer info](docs/developer_info.md).
 
 ## Contribute
+
+For contributions to the original cross-platform project, use
+[OpenHantek/OpenHantek6022](https://github.com/OpenHantek/OpenHantek6022). Report problems specific to this Intel
+macOS modification in this repository rather than sending fork-specific build or calibration reports upstream.
+
 We welcome any reported GitHub issue if you have a problem with this software. Send us a pull request for enhancements and fixes. Some random notes:
    - Read [how to properly contribute to open source projects on GitHub][10].
    - Create a separate branch other than *main* for your changes. It is not possible to directly commit to main on this repository.
