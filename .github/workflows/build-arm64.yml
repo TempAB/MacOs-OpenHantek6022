@@ -60,7 +60,11 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          git tag --force "${{ steps.metadata.outputs.version }}-macos-arm64" HEAD
+          arm_tag="${{ steps.metadata.outputs.version }}-macos-arm64"
+          git \
+            -c user.name="OpenHantek ARM64 CI" \
+            -c user.email="actions@users.noreply.github.com" \
+            tag --annotate --force --message "${arm_tag}" "${arm_tag}" HEAD
 
       - name: Configure native arm64 build
         shell: bash
