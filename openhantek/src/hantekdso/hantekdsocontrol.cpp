@@ -1887,7 +1887,7 @@ void HantekDsoControl::updateInterval() {
         acquireInterval = int( 1000 * scope->horizontal.acquireInterval );
     else
         acquireInterval = 1;
-#ifdef Q_PROCESSOR_ARM
+#if defined( Q_PROCESSOR_ARM ) && !defined( Q_OS_MACOS )
     displayInterval = 200; // update display at least every 200 ms
 #else
     displayInterval = 100; // update display at least every 100 ms

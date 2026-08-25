@@ -2,8 +2,11 @@
 
 ## Purpose
 
-This repository is the user's macOS-focused fork of OpenHantek6022. The current
-target is an Intel-only Mac. The user does not want to install or maintain a
+This repository is the user's macOS-focused fork of OpenHantek6022. The
+existing Intel application is complete, hardware-tested, and must not be
+recreated as part of Apple Silicon work. A separate native `arm64` application
+for a Mac mini M4 has now been built, physically validated, and published as a
+platform-specific pre-release. The user does not want to install or maintain a
 local compiler toolchain; builds and DMG packaging are performed by GitHub
 Actions.
 
@@ -20,6 +23,11 @@ with the physical oscilloscope before they are merged into `main`.
 - Final production branch: `codex/eeprom-calibration-final`
 - Calibration Help implementation: `3d2a2e0` and `35caf79`
 - Calibration Help branch: `codex/calibration-help`
+- Apple Silicon branch: `codex/apple-silicon-arm64`
+- Released Apple Silicon commit: `3dc09587083174cde8b808cf2382454d01ec8123`
+- Apple Silicon release tag: `v3.4.1-rc2-macos-arm64.1`
+- Apple Silicon pre-release:
+  <https://github.com/TempAB/MacOs-OpenHantek6022/releases/tag/v3.4.1-rc2-macos-arm64.1>
 
 The final production branch was created directly from `origin/main`. It contains
 the hardware-validated null-window and identical-candidate safeguards without
@@ -27,13 +35,27 @@ the temporary repeatability-study interface or collection code. After the
 public-facing README attribution was added, this branch was fast-forwarded into
 `main`.
 
+The local Apple Silicon head is `fdf981b`, while the immutable release tag
+points to remote commit `3dc0958`. Those two pre-documentation commits have the
+identical source tree `65e0a350630e341e052b95955c3443b4d4a9252b`. The remote
+ARM branch may advance beyond `3dc0958` with documentation or later approved
+work, but the release tag must remain fixed. Do not force-push the local commit
+over the released remote history.
+
 ## Build Process
 
-- GitHub Actions workflow: `.github/workflows/build.yml`
-- Target artifact: self-contained Intel `x86_64` macOS DMG
+- Apple Silicon workflow: `.github/workflows/build-arm64.yml`
+- Published ARM artifact: self-contained native `arm64` macOS DMG
+- Existing Intel workflow: `.github/workflows/build.yml`, retained for manual
+  dispatch only
+- Keep the Intel and Apple Silicon DMGs separate. ARM development must not
+  rebuild, replace, or convert the existing Intel application.
 - Do not install a local compiler toolchain unless the user explicitly requests
   it.
 - Do not merge hardware-related changes until the user has tested the build.
+- For GitHub Releases, upload the DMG and its `SHA256SUMS.txt` from inside the
+  Actions artifact. Do not publish the enclosing, temporary Actions ZIP as the
+  application download.
 
 ## Completed and Hardware-Tested Work
 
@@ -45,6 +67,105 @@ DMG. Relevant commits include:
 - `40d59e8` — build self-contained Intel macOS DMG
 - `e0e3c8e` — avoid rebundling Qt frameworks
 - `495f801` — audit Mach-O load commands accurately
+
+### Apple Silicon ARM64 expansion
+
+Branch `codex/apple-silicon-arm64` adds a separate native ARM64 packaging path
+for the Mac mini M4. The ARM workflow:
+
+- runs on GitHub's `macos-15` Apple Silicon runner;
+- explicitly supplies the Homebrew prefixes for Qt 6, libusb, and FFTW;
+- requires the main executable and every bundled Mach-O file to contain
+  `arm64`;
+- retains the non-system dependency audit and ad-hoc signature verification;
+- verifies the completed DMG and publishes an `OpenHantek-...-macos-arm64`
+  artifact with its own SHA-256 manifest; and
+- does not run or replace the existing Intel packaging path.
+
+The generic ARM throttles intended for lower-power systems such as Raspberry
+Pi are excluded only on macOS, so Apple Silicon uses the established desktop
+acquisition and display intervals. Intel behavior is unchanged. No OpenGL,
+offset-calibration, or EEPROM-calibration algorithm is changed in this work.
+
+GitHub Actions Run 6 completed successfully for remote commit `3dc0958`:
+
+<https://github.com/TempAB/MacOs-OpenHantek6022/actions/runs/32890006498>
+
+The build identifier is `3.4.1-rc2-27-g3dc0958-macos-arm64`. The workflow
+verified the native runner, main executable and all bundled Mach-O files as
+`arm64`, rejected unbundled non-system dependencies, verified the ad-hoc code
+signature, and validated the completed DMG. The uploaded Actions artifact ZIP
+has SHA-256
+`a5884476b94618329e4151fe8f70214d94948e62a94b7067b78325110e021bfd`.
+
+### Apple Silicon M4 hardware validation
+
+The released build was tested on a Mac mini M4 with the existing Hantek
+DSO-6022BL, serial `8164E42F1CC1`.
+
+Initial discovery failed and the application opened in demo mode because the
+6022BL was connected in its logic/programmer USB mode (`0925:3881`). The
+corrective action is to disconnect the device, press the **H/P** button, and
+reconnect it in oscilloscope mode. The scope then enumerated as `04b5:602a` and
+appeared in the application immediately. Do not treat `0925:3881` as an ARM
+application or USB-C adapter regression.
+
+The physical validation confirmed:
+
+- the copied device-specific calibration was discovered and applied;
+- both channels were centred near zero;
+- zero and 2 V reference signals retained the correct amplitude and zero
+  positions;
+- the normal maximum 12 MS/s acquisition was stable;
+- channel controls remained responsive;
+- normal rising and falling trigger behavior, including threshold response,
+  worked correctly;
+- clean quit/reopen and USB reconnect both rediscovered the scope; and
+- the About information reported Apple Silicon/`arm64`, the exact build
+  identifier, DSO-6022BL, serial number, firmware, OpenGL, and GLSL details.
+
+One acquisition session stopped after the probes were connected to the 2 V
+reference. Runtime logging showed repeated libusb `Input/Output Error`
+messages. Quitting the application and removing USB power from the scope for
+about one minute restored normal operation; the failure did not recur during
+the subsequent signal, control, trigger, restart, or reconnect checks. If the
+same symptom appears, use a full USB power cycle before investigating the ARM
+application or calibration data.
+
+### Apple Silicon pre-release publication
+
+The validated ARM build was published separately from the Intel build on
+2026-08-25:
+
+- Release tag: `v3.4.1-rc2-macos-arm64.1`
+- Release target: `3dc09587083174cde8b808cf2382454d01ec8123`
+- Release title: `OpenHantek6022 3.4.1-rc2 — Apple Silicon macOS Fork, Release 1`
+- DMG: `OpenHantek-3.4.1-rc2-27-g3dc0958-macos-arm64.dmg`
+- DMG SHA-256:
+  `897ed1cff48b5c712bd50dccc10c3b385f94e5ecb5ee9ada9559cc89c785b0c6`
+- Checksum asset: `SHA256SUMS.txt`
+
+The release is marked **Pre-release** and is not the latest production release.
+The DMG checksum manifest and a fresh local `hdiutil verify` both passed before
+publication. GitHub supplies the source ZIP and TAR archives automatically, so
+the release shows four assets: DMG, checksum manifest, source ZIP, and source
+TAR. The web release form created a lightweight tag that points directly to the
+tested commit; this differs from the annotated Intel tag but does not change
+the release downloads, generated source archives, or provenance.
+
+The ARM application remains ad-hoc signed and is not Developer ID signed or
+notarized. Preserve the Gatekeeper first-launch guidance in the release notes.
+Device-specific calibration files must never be bundled into a DMG or attached
+to a public release.
+
+At the time of this publication, the connected GitHub integration supported
+release and tag inspection but did not expose tag creation, release creation,
+or release-asset upload. The local GitHub CLI was not installed and local HTTPS
+Git credentials were not available. No installation was necessary: the release
+was created through the already authenticated in-app GitHub page, and the
+published tag, target, prerelease state, asset names, sizes, and SHA-256 digests
+were then verified through the GitHub API. Recheck available capabilities for a
+future release instead of assuming an installation or new login is required.
 
 ### Selector behavior
 
@@ -229,6 +350,23 @@ values plus `[offset_high]`.
 These files are outside the source repository and are not moved when the
 repository folder is relocated.
 
+On 2026-08-25 the calibration files were copied to the standard location on
+the Mac mini M4. The active INI SHA-256 is
+`88caf72ec6227cc513810e127dff5063d9f3ccb8dd51902effe03d8918b0234b`, the
+EEPROM reference SHA-256 remains
+`d2053e26578a3fd2aebc1221d79ec4e0ba6143943bf8c3c28cb64f5b2d81b22e`, and
+all four retained SHA-256 manifests verified successfully. The copied INI
+contains `[offset]`, `[offset_high]`, and `[eeprom] replace_eeprom=false`.
+The intended M4 validation sequence was therefore to verify discovery and
+loading of this existing calibration, not to create a replacement calibration
+or perform an EEPROM write.
+
+That M4 validation is now complete. The copied calibration produced correct
+zero and 2 V measurements on both channels at the normal 12 MS/s maximum. No
+new offset calibration or EEPROM operation is required. The preserved
+`[offset_high]` data remains dormant in the validated sub-30 MS/s operating
+range and must not be deleted merely because it was not exercised.
+
 Active INI:
 
 ```text
@@ -305,6 +443,17 @@ transaction state or USB write command.
 - Always create and review a fresh read-only safety bundle first.
 - Preserve the exact EEPROM and INI backups.
 - Never merge hardware-related work until the user tests it successfully.
+- Keep Intel and Apple Silicon DMGs separate; do not rebuild the validated
+  Intel application as part of ARM development.
+- Do not move, delete, or recreate either published platform release tag unless
+  the user explicitly requests a release replacement.
+- Do not include device-specific calibration files in source control, a DMG,
+  an Actions artifact intended for publication, or a GitHub Release.
+- Treat a DSO-6022BL enumerating as `0925:3881` as the wrong H/P mode. Press
+  **H/P** before reconnecting and expect `04b5:602a` in scope mode.
+- For a stalled acquisition with repeated libusb `Input/Output Error`, quit the
+  application and fully remove USB power from the scope before changing code
+  or calibration.
 - Keep temporary diagnostic code explicitly tracked and remove it after it is
   no longer needed.
 - Retain **Manual Command** and general upstream diagnostics unless the user
@@ -351,6 +500,22 @@ fork build instructions have been fast-forwarded into `main`. The completed,
 user-tested calibration Help integration from `codex/calibration-help` has
 also been fast-forwarded into `main`.
 
+Apple Silicon work on `codex/apple-silicon-arm64` passed GitHub Actions,
+completed physical Mac mini M4 validation with the copied calibration files,
+and was published as the separate pre-release
+`v3.4.1-rc2-macos-arm64.1`. On 2026-08-25, after explicit user approval, the
+validated remote ARM lineage and its final handoff documentation were merged
+into `main`. The existing Intel application was not rebuilt, replaced, or
+converted by that merge.
+
+Before resuming ARM work, fetch the remote branches and remember that local
+`fdf981b` and released remote `3dc0958` have the same pre-documentation tree but
+different commit identities. Treat the remote lineage as authoritative and do
+not force-update the release tag or remote branch. If a later application
+change is needed, build it through GitHub Actions, repeat proportionate M4
+hardware validation, and use a new ARM release number rather than replacing
+the published `.1` release.
+
 After relocating or freshly cloning the repository, start a new Codex local
 project at the new folder and ask it to read this file and the calibration
 sections of `README.md` before changing anything.
@@ -371,5 +536,9 @@ Confirm that:
 - `openhantek` points to the original project.
 - `main` matches `origin/main` before starting new work.
 - The intended calibration branch or merged final commit is present.
+- `main` contains the merged Apple Silicon expansion and the released ARM
+  commit remains in its ancestry.
+- The released ARM tag still resolves to `3dc0958` and the ARM pre-release and
+  its two uploaded assets remain available.
 - No repeatability-study action or collection code has been reintroduced.
 - Any untracked local documents are intentionally preserved or excluded.

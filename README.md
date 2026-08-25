@@ -1,21 +1,24 @@
-# OpenHantek6022 — Intel macOS-focused modification
+# OpenHantek6022 — macOS-focused modification
 
+[![Apple Silicon macOS DMG](https://github.com/TempAB/MacOs-OpenHantek6022/actions/workflows/build-arm64.yml/badge.svg?branch=main)](https://github.com/TempAB/MacOs-OpenHantek6022/actions/workflows/build-arm64.yml)
 [![Intel macOS DMG](https://github.com/TempAB/MacOs-OpenHantek6022/actions/workflows/build.yml/badge.svg?branch=main)](https://github.com/TempAB/MacOs-OpenHantek6022/actions/workflows/build.yml)
 [![Original project](https://img.shields.io/badge/original-OpenHantek%2FOpenHantek6022-blue)](https://github.com/OpenHantek/OpenHantek6022)
 
 > [!IMPORTANT]
-> This repository is an independently maintained, Intel macOS-focused modification of
+> This repository is an independently maintained, macOS-focused modification of
 > [OpenHantek6022](https://github.com/OpenHantek/OpenHantek6022), originally developed by Martin
 > Homuth-Rosemann and the OpenHantek contributors. It is not an official upstream release or a replacement for the
 > original cross-platform project. If you are seeking the original Linux, Windows, macOS, or other supported builds,
 > documentation, releases, or project support, please use
 > **[OpenHantek/OpenHantek6022](https://github.com/OpenHantek/OpenHantek6022)**.
 
-This modification is maintained for a specific Intel `x86_64` Mac and has been hardware-tested with a Hantek
-DSO-6022BL. It adds a self-contained Intel macOS DMG workflow, consistent selector behavior, safer persistent offset
-calibration, native macOS calibration storage, guarded EEPROM-calibration tools, and a bundled
-[Calibration & EEPROM Safety Guide](docs/OpenHantek6022_Calibration_and_EEPROM_Safety.html). The fork does not run
-upstream's Linux, Windows, Apple Silicon, or other device test matrix.
+This modification maintains separate native DMGs for the existing Intel `x86_64` application and the new Apple
+Silicon `arm64` application. The Intel application has been hardware-tested with a Hantek DSO-6022BL and remains
+unchanged. The ARM64 application targets a Mac mini M4 and must complete the hardware-validation sequence before it
+is merged into `main`. The fork adds consistent selector behavior, safer persistent offset calibration, native macOS
+calibration storage, guarded EEPROM-calibration tools, and a bundled
+[Calibration & EEPROM Safety Guide](docs/OpenHantek6022_Calibration_and_EEPROM_Safety.html). It does not run
+upstream's Linux, Windows, or other device test matrix.
 
 OpenHantek6022 is free software for **Hantek DSO6022** USB digital signal oscilloscopes. The underlying project
 supports Hantek 6022BE/BL and compatible scopes such as Voltcraft, Darkwire, Protek, and Acetech devices. Most general
@@ -48,9 +51,10 @@ project information below is inherited from upstream; fork-specific behavior is 
 ## About This Modification
 
 This repository preserves the original project's license and history while maintaining a focused set of changes for
-Intel macOS use. The principal differences are:
+the Intel and Apple Silicon Macs in this project. The principal differences are:
 
-* A GitHub Actions workflow that builds, audits, ad-hoc signs, and packages a self-contained Intel `x86_64` DMG.
+* Separate GitHub Actions workflows and DMGs for the existing Intel `x86_64` application and the Apple Silicon
+  `arm64` application. ARM work does not recreate or replace the Intel application.
 * Standardized hover-wheel, keyboard, and native popup behavior for selectors.
 * Offset calibration that requires all 16 channel/range combinations, rejects unstable measurements, verifies the
   saved INI, and never writes EEPROM automatically.
@@ -77,8 +81,9 @@ Supported devices:
 * Demo mode is provided by the `-d` or `--demoMode` command line option.
 * The original project's fully supported operating system is Linux, developed under Debian stable (currently
   *trixie*) for amd64, with additional Raspberry Pi, FreeBSD, Windows, and macOS build coverage described upstream.
-* This modification is hardware-tested on Intel `x86_64` macOS only. It does not provide or imply Linux, Windows,
-  Apple Silicon, FreeBSD, Raspberry Pi, or general upstream support.
+* This modification is hardware-tested on Intel `x86_64` macOS. Apple Silicon `arm64` support targets a Mac mini M4
+  and remains pending physical hardware validation. It does not provide or imply Linux, Windows, FreeBSD, Raspberry
+  Pi, or general upstream support.
 * Uses [free open source firmware](https://github.com/Ho-Ro/Hantek6022API), no longer dependent on nonfree Hantek firmware.
 * Extensive [User Manual](docs/OpenHantek6022_User_Manual.pdf) with technical specs and schematics.
 
@@ -133,18 +138,21 @@ A [little HW modification](docs/HANTEK6022_AC_Modification.pdf) adds AC coupling
 ## Continuous Integration
 
 Pushes to this fork's `main` and `codex/**` branches run the
-[Intel macOS DMG workflow](https://github.com/TempAB/MacOs-OpenHantek6022/actions/workflows/build.yml). It builds on
-GitHub's `macos-15-intel` runner, bundles non-system runtime dependencies, verifies the application is `x86_64`,
-audits Mach-O load commands for portability, verifies the ad-hoc code signature, and uploads a DMG plus SHA-256
-manifest. Workflow artifacts are retained for 30 days.
+[Apple Silicon macOS DMG workflow](https://github.com/TempAB/MacOs-OpenHantek6022/actions/workflows/build-arm64.yml).
+It builds natively on GitHub's `macos-15` ARM64 runner, supplies the Apple Silicon Homebrew dependency prefixes,
+bundles non-system runtime dependencies, requires every bundled Mach-O file to contain `arm64`, audits load commands
+for portability, verifies the ad-hoc code signature and DMG, and uploads a separate DMG plus SHA-256 manifest.
+Workflow artifacts are retained for 30 days.
 
-This fork does not run Linux, Windows, Apple Silicon, or general release packaging jobs. Refer to the
+The existing [Intel macOS DMG workflow](https://github.com/TempAB/MacOs-OpenHantek6022/actions/workflows/build.yml)
+is retained for manual dispatch only. ARM development does not run it or replace the validated Intel application.
+This fork does not run Linux, Windows, or general release packaging jobs. Refer to the
 [original project's workflows](https://github.com/OpenHantek/OpenHantek6022/actions) for upstream multi-platform
 builds.
 
 ## Building OpenHantek6022 from source
 
-To build this Intel macOS-focused modification, clone this repository:
+To build this macOS-focused modification, clone this repository:
 
 ```sh
 git clone https://github.com/TempAB/MacOs-OpenHantek6022.git
@@ -176,10 +184,13 @@ If you make small changes to the local source code, it is sufficient to call `ma
 
 ## Install Prebuilt Binary Packages
 
-Intel macOS DMGs for this modification are available from successful runs of the fork's
-[GitHub Actions workflow](https://github.com/TempAB/MacOs-OpenHantek6022/actions/workflows/build.yml). Select a
-successful `main` run and download its `OpenHantek-...-macos-x86_64` artifact. These artifacts are ad-hoc signed,
-are not Apple-notarized, and expire after 30 days.
+Apple Silicon DMGs for this modification are available from successful runs of the fork's
+[ARM64 GitHub Actions workflow](https://github.com/TempAB/MacOs-OpenHantek6022/actions/workflows/build-arm64.yml).
+Download the `OpenHantek-...-macos-arm64` artifact. It is separate from the existing Intel application. Both
+architectures use ad-hoc signing rather than Apple notarization, and workflow artifacts expire after 30 days.
+
+The Intel workflow is retained for manual dispatch only. The already validated Intel application does not need to
+be rebuilt for Apple Silicon testing.
 
 For official upstream multi-platform packages and releases, use the original project's resources below.
 
@@ -229,9 +240,9 @@ guide is available from the **Help** button in both the *Calibrate Offset* prepa
 Calibration Safety* dialog.
 
 The Help menu labels the inherited PDF as *User Manual (Original Project)* and keeps the original AC and frequency
-generator modification documents. *About This Intel macOS Modification* opens the fork-attribution section of the
-offline guide. If the bundled guide cannot be found, the application opens the matching section of this README
-online.
+generator modification documents. The architecture-specific *About This … macOS Modification* item opens the
+fork-attribution section of the offline guide. If the bundled guide cannot be found, the application opens the
+matching section of this README online.
 
 #### Required measurement procedure
 
@@ -361,8 +372,8 @@ Please refer also to the [developer info](docs/developer_info.md).
 ## Contribute
 
 For contributions to the original cross-platform project, use
-[OpenHantek/OpenHantek6022](https://github.com/OpenHantek/OpenHantek6022). Report problems specific to this Intel
-macOS modification in this repository rather than sending fork-specific build or calibration reports upstream.
+[OpenHantek/OpenHantek6022](https://github.com/OpenHantek/OpenHantek6022). Report problems specific to this macOS
+modification in this repository rather than sending fork-specific build or calibration reports upstream.
 
 We welcome any reported GitHub issue if you have a problem with this software. Send us a pull request for enhancements and fixes. Some random notes:
    - Read [how to properly contribute to open source projects on GitHub][10].
