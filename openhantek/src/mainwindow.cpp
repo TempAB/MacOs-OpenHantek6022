@@ -137,7 +137,12 @@ MainWindow::MainWindow( HantekDsoControl *dsoControl, DsoSettings *settings, Exp
     ui->actionCalibrationGuide->setIcon( QIcon( iconPath + "book.svg" ) );
     ui->actionCalibrationGuide->setToolTip( tr( "Safe calibration and EEPROM procedures" ) );
     ui->actionAboutModification->setIcon( QIcon( iconPath + "about.svg" ) );
+#if defined( Q_OS_MACOS ) && defined( Q_PROCESSOR_ARM )
+    ui->actionAboutModification->setText( tr( "About This Apple Silicon &macOS Modification" ) );
+    ui->actionAboutModification->setToolTip( tr( "About this Apple Silicon arm64 macOS-focused modification" ) );
+#else
     ui->actionAboutModification->setToolTip( tr( "About this Intel macOS-focused modification" ) );
+#endif
     ui->actionACmodification->setIcon( QIcon( iconPath + "book.svg" ) );
     ui->actionACmodification->setToolTip( tr( "Documentation how to add HW for AC coupled inputs" ) );
     ui->actionFrequencyGeneratorModification->setIcon( QIcon( iconPath + "book.svg" ) );
@@ -719,14 +724,23 @@ MainWindow::MainWindow( HantekDsoControl *dsoControl, DsoSettings *settings, Exp
                                        .arg( dsoSettings->deviceName, dsoSettings->deviceID ) // device type, ser. num
                                        .arg( dsoSettings->deviceFW, 4, 16,
                                              QChar( '0' ) ); // FW version
+#if defined( Q_OS_MACOS ) && defined( Q_PROCESSOR_ARM )
+        const QString modificationDescription =
+            tr( "<p><b>Apple Silicon macOS-focused modification</b><br/>"
+                "Independently maintained by AB for Apple Silicon arm64 macOS.<br/>"
+                "<a href='https://github.com/TempAB/MacOs-OpenHantek6022'>"
+                "github.com/TempAB/MacOs-OpenHantek6022</a></p>" );
+#else
+        const QString modificationDescription =
+            tr( "<p><b>Intel macOS-focused modification</b><br/>"
+                "Independently maintained by AB for Intel x86_64 macOS.<br/>"
+                "<a href='https://github.com/TempAB/MacOs-OpenHantek6022'>"
+                "github.com/TempAB/MacOs-OpenHantek6022</a></p>" );
+#endif
         QMessageBox::about(
             this, QString( "%1 (%2)" ).arg( QCoreApplication::applicationName(), VERSION ),
-            QString( tr( "<p>Open source software for Hantek6022 USB oscilloscopes</p>"
-                         "<p><b>Intel macOS-focused modification</b><br/>"
-                         "Independently maintained by AB for Intel x86_64 macOS.<br/>"
-                         "<a href='https://github.com/TempAB/MacOs-OpenHantek6022'>"
-                         "github.com/TempAB/MacOs-OpenHantek6022</a></p>"
-                         "<p><b>Original OpenHantek6022 project</b><br/>"
+            tr( "<p>Open source software for Hantek6022 USB oscilloscopes</p>" ) + modificationDescription
+                + QString( tr( "<p><b>Original OpenHantek6022 project</b><br/>"
                          "Maintainer: Martin Homuth-Rosemann<br/>"
                          "<a href='https://github.com/OpenHantek/OpenHantek6022'>"
                          "github.com/OpenHantek/OpenHantek6022</a></p>"

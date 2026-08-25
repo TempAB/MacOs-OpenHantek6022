@@ -1,7 +1,11 @@
-name: Intel macOS DMG
+name: Apple Silicon macOS DMG
 
 on:
   workflow_dispatch:
+  push:
+    branches:
+      - main
+      - "codex/**"
 
 permissions:
   contents: read
@@ -14,9 +18,9 @@ env:
   BUILD_TYPE: Release
 
 jobs:
-  macos-intel:
-    name: Build Intel DMG
-    runs-on: macos-15-intel
+  macos-arm64:
+    name: Build Apple Silicon DMG
+    runs-on: macos-15
     timeout-minutes: 60
 
     steps:
@@ -26,6 +30,16 @@ jobs:
           fetch-depth: 0
           fetch-tags: true
           submodules: recursive
+
+      - name: Verify native Apple Silicon runner
+        shell: bash
+        run: |
+          set -euo pipefail
+          runner_arch="$(uname -m)"
+          if [[ "${runner_arch}" != "arm64" ]]; then
+            echo "::error::Expected an arm64 runner, found ${runner_arch}"
+            exit 1
+          fi
 
       - name: Determine build version
         id: metadata
@@ -42,15 +56,17 @@ jobs:
           set -euo pipefail
           brew install libusb fftw qt@6 cmake binutils create-dmg dylibbundler
 
-      - name: Configure
+      - name: Configure native arm64 build
         shell: bash
         run: |
           set -euo pipefail
+          dependency_prefixes="$(brew --prefix qt@6);$(brew --prefix libusb);$(brew --prefix fftw)"
           cmake \
             -S . \
             -B build \
             -DCMAKE_BUILD_TYPE="${BUILD_TYPE}" \
-            -DCMAKE_PREFIX_PATH="$(brew --prefix qt@6)" \
+            -DCMAKE_OSX_ARCHITECTURES=arm64 \
+            -DCMAKE_PREFIX_PATH="${dependency_prefixes}" \
             -DBUILD_MACOSX_BUNDLE=ON
 
       - name: Build
@@ -90,7 +106,7 @@ jobs:
           codesign --force --deep --sign - "${app_path}"
           codesign --verify --deep --strict --verbose=2 "${app_path}"
 
-      - name: Verify Intel architecture and portability
+      - name: Verify arm64 architecture and portability
         shell: bash
         run: |
           set -euo pipefail
@@ -100,11 +116,12 @@ jobs:
 
           file "${binary_path}"
           architecture="$(lipo -archs "${binary_path}")"
-          if [[ "${architecture}" != "x86_64" ]]; then
-            echo "::error::Expected x86_64, found ${architecture}"
+          if [[ "${architecture}" != "arm64" ]]; then
+            echo "::error::Expected arm64, found ${architecture}"
             exit 1
           fi
 
+          architecture_failure=0
           unbundled=0
           while IFS= read -r -d '' candidate; do
             if [[ "$(file -b "${candidate}")" != *"Mach-O"* ]]; then
@@ -112,6 +129,11 @@ jobs:
             fi
 
             relative_candidate="${candidate#"${GITHUB_WORKSPACE}/"}"
+            if ! lipo -verify_arch arm64 "${candidate}" >/dev/null; then
+              echo "::error file=${relative_candidate}::Mach-O file does not contain arm64"
+              architecture_failure=1
+            fi
+
             while IFS= read -r dependency; do
               dependency="${dependency#"${dependency%%[![:space:]]*}"}"
               dependency="${dependency%% (*}"
@@ -140,11 +162,11 @@ jobs:
             )
           done < <(find "${app_path}" -type f -print0)
 
-          if [[ "${unbundled}" -ne 0 ]]; then
+          if [[ "${architecture_failure}" -ne 0 || "${unbundled}" -ne 0 ]]; then
             exit 1
           fi
 
-      - name: Create DMG
+      - name: Create and verify ARM64 DMG
         shell: bash
         run: |
           set -euo pipefail
@@ -152,7 +174,7 @@ jobs:
           app_path="${GITHUB_WORKSPACE}/build/openhantek/OpenHantek.app"
           version="${{ steps.metadata.outputs.version }}"
           output_dir="${GITHUB_WORKSPACE}/dist"
-          dmg_path="${output_dir}/OpenHantek-${version}-macos-x86_64.dmg"
+          dmg_path="${output_dir}/OpenHantek-${version}-macos-arm64.dmg"
 
           mkdir -p "${output_dir}"
           create-dmg \
@@ -169,13 +191,17 @@ jobs:
             "${dmg_path}" \
             "${app_path}"
 
-          shasum -a 256 "${dmg_path}" > "${output_dir}/SHA256SUMS.txt"
+          hdiutil verify "${dmg_path}"
+          (
+            cd "${output_dir}"
+            shasum -a 256 "$(basename "${dmg_path}")" > SHA256SUMS.txt
+          )
           ls -lh "${output_dir}"
 
-      - name: Upload Intel DMG
+      - name: Upload Apple Silicon DMG
         uses: actions/upload-artifact@v7
         with:
-          name: OpenHantek-${{ steps.metadata.outputs.version }}-macos-x86_64
+          name: OpenHantek-${{ steps.metadata.outputs.version }}-macos-arm64
           path: |
             dist/*.dmg
             dist/SHA256SUMS.txt

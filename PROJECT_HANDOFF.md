@@ -2,10 +2,12 @@
 
 ## Purpose
 
-This repository is the user's macOS-focused fork of OpenHantek6022. The current
-target is an Intel-only Mac. The user does not want to install or maintain a
-local compiler toolchain; builds and DMG packaging are performed by GitHub
-Actions.
+This repository is the user's macOS-focused fork of OpenHantek6022. The
+existing Intel application is complete, hardware-tested, and must not be
+recreated as part of Apple Silicon work. The current development target is a
+separate native `arm64` application for a Mac mini M4. The user does not want
+to install or maintain a local compiler toolchain; builds and DMG packaging are
+performed by GitHub Actions.
 
 All hardware-related changes must be built through GitHub Actions and tested
 with the physical oscilloscope before they are merged into `main`.
@@ -29,8 +31,12 @@ public-facing README attribution was added, this branch was fast-forwarded into
 
 ## Build Process
 
-- GitHub Actions workflow: `.github/workflows/build.yml`
-- Target artifact: self-contained Intel `x86_64` macOS DMG
+- Apple Silicon workflow: `.github/workflows/build-arm64.yml`
+- Current target artifact: self-contained native `arm64` macOS DMG
+- Existing Intel workflow: `.github/workflows/build.yml`, retained for manual
+  dispatch only
+- Keep the Intel and Apple Silicon DMGs separate. ARM development must not
+  rebuild, replace, or convert the existing Intel application.
 - Do not install a local compiler toolchain unless the user explicitly requests
   it.
 - Do not merge hardware-related changes until the user has tested the build.
@@ -45,6 +51,27 @@ DMG. Relevant commits include:
 - `40d59e8` — build self-contained Intel macOS DMG
 - `e0e3c8e` — avoid rebundling Qt frameworks
 - `495f801` — audit Mach-O load commands accurately
+
+### Apple Silicon ARM64 expansion
+
+Branch `codex/apple-silicon-arm64` adds a separate native ARM64 packaging path
+for the Mac mini M4. The ARM workflow:
+
+- runs on GitHub's `macos-15` Apple Silicon runner;
+- explicitly supplies the Homebrew prefixes for Qt 6, libusb, and FFTW;
+- requires the main executable and every bundled Mach-O file to contain
+  `arm64`;
+- retains the non-system dependency audit and ad-hoc signature verification;
+- verifies the completed DMG and publishes an `OpenHantek-...-macos-arm64`
+  artifact with its own SHA-256 manifest; and
+- does not run or replace the existing Intel packaging path.
+
+The generic ARM throttles intended for lower-power systems such as Raspberry
+Pi are excluded only on macOS, so Apple Silicon uses the established desktop
+acquisition and display intervals. Intel behavior is unchanged. No OpenGL,
+offset-calibration, or EEPROM-calibration algorithm is changed in this work.
+The ARM64 application remains pending GitHub Actions and physical M4 validation
+until those checks are completed.
 
 ### Selector behavior
 
@@ -229,6 +256,17 @@ values plus `[offset_high]`.
 These files are outside the source repository and are not moved when the
 repository folder is relocated.
 
+On 2026-08-25 the calibration files were copied to the standard location on
+the Mac mini M4. The active INI SHA-256 is
+`88caf72ec6227cc513810e127dff5063d9f3ccb8dd51902effe03d8918b0234b`, the
+EEPROM reference SHA-256 remains
+`d2053e26578a3fd2aebc1221d79ec4e0ba6143943bf8c3c28cb64f5b2d81b22e`, and
+all four retained SHA-256 manifests verified successfully. The copied INI
+contains `[offset]`, `[offset_high]`, and `[eeprom] replace_eeprom=false`.
+Therefore the M4 validation sequence should verify discovery and loading of
+this existing calibration; it should not create a replacement calibration or
+perform an EEPROM write.
+
 Active INI:
 
 ```text
@@ -305,6 +343,8 @@ transaction state or USB write command.
 - Always create and review a fresh read-only safety bundle first.
 - Preserve the exact EEPROM and INI backups.
 - Never merge hardware-related work until the user tests it successfully.
+- Keep Intel and Apple Silicon DMGs separate; do not rebuild the validated
+  Intel application as part of ARM development.
 - Keep temporary diagnostic code explicitly tracked and remove it after it is
   no longer needed.
 - Retain **Manual Command** and general upstream diagnostics unless the user
@@ -350,6 +390,11 @@ hardware-tested final implementation, public attribution notice, and corrected
 fork build instructions have been fast-forwarded into `main`. The completed,
 user-tested calibration Help integration from `codex/calibration-help` has
 also been fast-forwarded into `main`.
+
+Apple Silicon work continues on `codex/apple-silicon-arm64`. Its ARM64 DMG must
+pass GitHub Actions and then be tested on the Mac mini M4 with the copied
+calibration files before any merge to `main`. The existing Intel application
+is not part of that validation or rebuild sequence.
 
 After relocating or freshly cloning the repository, start a new Codex local
 project at the new folder and ask it to read this file and the calibration
