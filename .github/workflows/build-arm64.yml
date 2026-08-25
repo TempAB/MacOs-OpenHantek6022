@@ -132,7 +132,7 @@ jobs:
             fi
 
             relative_candidate="${candidate#"${GITHUB_WORKSPACE}/"}"
-            if ! lipo -verify_arch arm64 "${candidate}" >/dev/null; then
+            if ! lipo "${candidate}" -verify_arch arm64 >/dev/null; then
               echo "::error file=${relative_candidate}::Mach-O file does not contain arm64"
               architecture_failure=1
             fi
