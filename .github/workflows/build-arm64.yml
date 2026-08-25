@@ -46,7 +46,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          version="$(git describe --tags --always)"
+          version="$(git describe --tags --always --exclude '*macos-intel*')"
           version="${version//\//-}"
           echo "version=${version}" | tee -a "${GITHUB_OUTPUT}"
 
