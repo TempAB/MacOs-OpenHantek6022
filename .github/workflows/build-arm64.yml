@@ -56,6 +56,12 @@ jobs:
           set -euo pipefail
           brew install libusb fftw qt@6 cmake binutils create-dmg dylibbundler
 
+      - name: Set ARM64 application version
+        shell: bash
+        run: |
+          set -euo pipefail
+          git tag --force "${{ steps.metadata.outputs.version }}-macos-arm64" HEAD
+
       - name: Configure native arm64 build
         shell: bash
         run: |
