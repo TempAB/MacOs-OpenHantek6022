@@ -60,13 +60,16 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          dependency_prefixes="$(brew --prefix qt@6);$(brew --prefix libusb);$(brew --prefix fftw)"
+          libusb_prefix="$(brew --prefix libusb)"
+          dependency_prefixes="$(brew --prefix qt@6);${libusb_prefix};$(brew --prefix fftw)"
+          test -f "${libusb_prefix}/include/libusb-1.0/libusb.h"
           cmake \
             -S . \
             -B build \
             -DCMAKE_BUILD_TYPE="${BUILD_TYPE}" \
             -DCMAKE_OSX_ARCHITECTURES=arm64 \
             -DCMAKE_PREFIX_PATH="${dependency_prefixes}" \
+            -DLIBUSB_INCLUDE_DIR="${libusb_prefix}/include" \
             -DBUILD_MACOSX_BUNDLE=ON
 
       - name: Build
